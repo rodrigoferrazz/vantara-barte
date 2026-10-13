@@ -1,0 +1,3 @@
+# Extrato bancário como fonte principal de Créditos
+
+Todo Crédito nasce do Extrato, inclusive liquidações de boleto. O Retorno de cobrança fica fora da fase 1. Na fase 2, tanto o retorno CNAB do boleto quanto o Pix recebido pela API Pix só enriquecem um Crédito existente (com o Identificador de cobrança e, no boleto, separando multa e juros), nunca criam um. A ligação é por conta, data do crédito e valor; sem um par único, o Crédito não é enriquecido e segue o caminho da fase 1, e um Retorno sem Crédito no Extrato não vira Crédito. O Extrato cobre todos os canais (Pix, TED, depósito, boleto) e é o que prova que o dinheiro entrou; ter uma única fonte de Créditos evita contar a mesma liquidação duas vezes.
