@@ -7,7 +7,7 @@ from typing import Protocol
 
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
 from conciliacao.dominio import ArquivoRecusado, ChaveNatural, Lancamento, Natureza, Titulo
-from conciliacao.normalizacao import FormatoInvalido, centavos_de_valor_ptbr, data_ptbr
+from conciliacao.normalizacao import FormatoInvalido, centavos_de_valor_ptbr, cnpj, data_ptbr
 
 
 class Recusa(Exception):
@@ -52,7 +52,7 @@ class ProtheusContasAReceber:
                     sistema_de_origem="Protheus",
                     documento=campos["documento"],
                     cliente=campos["cliente"],
-                    cnpj=campos["cnpj"],
+                    cnpj=_formato(numero, cnpj, campos["cnpj"]),
                     nosso_numero=campos["nosso_numero"] or None,
                     vencimento=_formato(numero, data_ptbr, campos["vencimento"]),
                     valor_centavos=_formato(numero, centavos_de_valor_ptbr, campos["valor"]),

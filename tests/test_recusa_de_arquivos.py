@@ -108,6 +108,22 @@ def test_protheus_com_valor_em_formato_inesperado_e_recusado_inteiro(
     assert len(resultado.fila_de_excecoes) == 1
 
 
+def test_protheus_com_cnpj_em_formato_inesperado_e_recusado_inteiro(pasta: Path, armazenamento: Armazenamento) -> None:
+    escrever_protheus(
+        pasta,
+        [
+            TituloProtheus(documento="NF 900211", valor="100,00", nosso_numero="000066600021"),
+            TituloProtheus(documento="NF 900212", valor="200,00", cnpj="10.200.300/0001"),
+        ],
+    )
+    escrever_extrato_itau(pasta, [LinhaItau("06/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "100,00", documento="000066600021")])
+
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+
+    assert "10.200.300/0001" in _motivo(resultado.arquivos_recusados, "receber_protheus.csv")
+    assert resultado.lista_de_baixa == []
+
+
 def test_extrato_de_banco_sem_adaptador_e_recusado_com_motivo(pasta: Path, armazenamento: Armazenamento) -> None:
     _escrever(pasta, "bradesco_conta.csv", "Data;Lançamento;Dcto.;Crédito (R$);Débito (R$);Saldo (R$)", "14/03/2025;PIX;1;95,00;;95,00")
     configuracao = Configuracao(

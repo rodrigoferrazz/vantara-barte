@@ -18,6 +18,7 @@ from conciliacao.dominio import (
     Titulo,
     TotalDoDestino,
 )
+from conciliacao.normalizacao import raiz_do_cnpj
 
 _ESQUEMA = """
 CREATE TABLE IF NOT EXISTS lancamentos (
@@ -117,6 +118,10 @@ class Armazenamento:
             (Natureza.CREDITO.value,),
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
+
+    def franqueados_conhecidos(self) -> frozenset[str]:
+        linhas = self._conexao.execute("SELECT DISTINCT cnpj FROM titulos")
+        return frozenset(raiz_do_cnpj(cnpj) for (cnpj,) in linhas)
 
     def registrar_execucao(
         self,

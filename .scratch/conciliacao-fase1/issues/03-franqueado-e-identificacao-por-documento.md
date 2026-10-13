@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] CNPJ no histórico (com ou sem pontuação) identifica o Franqueado pela raiz, incluindo filiais
-- [ ] Identificado + Valor único vai para a Lista com explicação citando o documento
-- [ ] Identificado com valor que bate com mais de um Título vai para a Fila
-- [ ] Identificado sem Título candidato vai para a Fila como Crédito sem título em aberto
-- [ ] Crédito sem título em aberto de uma execução casa com Título novo que aparece numa execução seguinte
+- [x] CNPJ no histórico (com ou sem pontuação) identifica o Franqueado pela raiz, incluindo filiais
+- [x] Identificado + Valor único vai para a Lista com explicação citando o documento
+- [x] Identificado com valor que bate com mais de um Título vai para a Fila
+- [x] Identificado sem Título candidato vai para a Fila como Crédito sem título em aberto
+- [x] Crédito sem título em aberto de uma execução casa com Título novo que aparece numa execução seguinte
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

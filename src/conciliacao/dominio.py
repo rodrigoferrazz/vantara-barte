@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
+from conciliacao.normalizacao import raiz_do_cnpj
+
 
 class Destino(StrEnum):
     LISTA_DE_BAIXA = "Lista de baixa"
@@ -34,6 +36,10 @@ class Titulo:
     nosso_numero: str | None
     vencimento: date
     valor_centavos: int
+
+    @property
+    def franqueado(self) -> str:
+        return raiz_do_cnpj(self.cnpj)
 
 
 type ChaveNatural = tuple[str, str, date, Natureza, int, str, str, int]

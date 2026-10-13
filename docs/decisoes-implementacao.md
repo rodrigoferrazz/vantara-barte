@@ -73,3 +73,33 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** o Resumo mostra "Arquivos lidos" e "Arquivos recusados" como contagem, seguidas de uma linha por arquivo (recusados com o motivo). A aba "Arquivos recusados" (colunas Arquivo e Motivo) é a última do workbook, na ordem das abas da spec. O teste do comando que listava exatamente as quatro abas do ticket 01 passou a incluir a nova aba, porque o ticket exige a aba.
 - **Por quê:** a contagem é o que o ticket pede; manter o motivo no Resumo segue a spec ("o que foi recusado e por quê"). Arquivo vazio é recusado com "o arquivo está vazio".
 - **Alternativas:** só a aba, sem detalhe no Resumo; contagem no mesmo texto dos nomes, como no ticket 01.
+
+## Ticket 03: CNPJ do Título normalizado na leitura
+
+- **Decisão:** o adaptador do Protheus aceita o CNPJ como `12.345.678/0001-90` ou com 14 dígitos e guarda só os dígitos; qualquer outro formato recusa o arquivo inteiro com o motivo. O dígito verificador não é conferido.
+- **Por quê:** a spec manda guardar o CNPJ só com dígitos e raiz de 8; recusar formato estranho segue o ADR 0005. A amostra tem CNPJs com dígito verificador inválido, então conferir o dígito recusaria exportações reais.
+- **Alternativas:** conferir o dígito verificador; ignorar a linha com CNPJ inválido.
+
+## Ticket 03: CNPJ no histórico
+
+- **Decisão:** o histórico é varrido por CNPJs com pontuação completa ou com 14 dígitos seguidos, sem fazer parte de um número maior. Um CNPJ identifica o Franqueado quando sua raiz é a de algum Título já visto; CNPJ de raiz desconhecida é ignorado. Se os CNPJs conhecidos do histórico apontam para mais de um Franqueado, o Crédito vai para a Fila como "sem identificação do pagador". CPF ainda não é procurado: só identifica quando for Pagador conhecido confirmado pela Analista (ticket 13).
+- **Por quê:** a raiz liga matriz e filiais (CONTEXT, Franqueado); com dois Franqueados a plataforma estaria escolhendo; não há CPF de Pagador conhecido antes das confirmações.
+- **Alternativas:** usar o primeiro CNPJ do histórico; aceitar CNPJ parcialmente pontuado; procurar CPF já agora sem ter com o que comparar.
+
+## Ticket 03: precedência entre nosso número e CNPJ
+
+- **Decisão:** o nosso número é avaliado antes do CNPJ. Crédito cujo documento é nosso número de mais de um Título continua na Fila sem cair para a regra de CNPJ.
+- **Por quê:** mantém a decisão do ticket 01 (nunca escolher entre Títulos igualmente válidos) e evita que uma regra mais fraca resolva um caso já marcado como ambíguo.
+- **Alternativas:** usar o CNPJ para desempatar o nosso número.
+
+## Ticket 03: Franqueado conhecido e Crédito sem título em aberto
+
+- **Decisão:** o motor recebe as raízes de CNPJ de todos os Títulos já guardados, de qualquer execução, além dos Títulos em aberto da execução atual. Crédito identificado cujo Franqueado não tem nenhum Título em aberto vai para a Fila como "Crédito sem título em aberto", sem sugestão; como todo Crédito guardado é reclassificado a cada execução, ele casa quando o Título aparece.
+- **Por quê:** um Franqueado cujos Títulos foram todos baixados continua sendo Franqueado; sem lembrar dele, a antecipação nunca seria identificada. O caso só leva à Fila, nunca à Lista.
+- **Alternativas:** conhecer só os Franqueados da exportação atual (Crédito sem título em aberto seria inalcançável por documento).
+
+## Ticket 03: Franqueado identificado com valor que não fecha ou que se repete
+
+- **Decisão:** com Títulos em aberto e nenhum de mesmo valor, o Crédito vai para a Fila como "valor não fecha", sugerindo o Título só quando o Franqueado tem um único Título em aberto. Com mais de um Título de mesmo valor, vai como "mais de uma combinação possível", sem sugestão, citando os Títulos na explicação.
+- **Por quê:** a precedência da spec põe "valor não fecha" antes de "Crédito sem título em aberto"; sugerir o único Título repete o tratamento do nosso número com valor diferente (ticket 01); com vários Títulos a plataforma não escolhe. Valor único também abrange combinação, por isso o Motivo de combinação. Encargo (ticket 04) e somas (ticket 07) refinam esses casos.
+- **Alternativas:** tratar como "Crédito sem título em aberto"; sugerir todos os Títulos de mesmo valor.

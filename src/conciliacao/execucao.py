@@ -17,7 +17,7 @@ def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_guardados())
-        classificacoes = conciliar(leitura.titulos, lancamentos.values())
+        classificacoes = conciliar(leitura.titulos, lancamentos.values(), armazenamento.franqueados_conhecidos())
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
         execucao = armazenamento.registrar_execucao(
