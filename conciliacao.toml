@@ -1,0 +1,6 @@
+# Associa o nome de cada arquivo de Extrato ao banco e à conta (padrões no estilo glob).
+
+[[contas]]
+padrao = "*extrato_bancario*.csv"
+banco = "itau"
+conta = "conta-principal-cobranca"
