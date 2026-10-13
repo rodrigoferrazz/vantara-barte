@@ -305,3 +305,28 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** o relatório conta só os Créditos da Fila de exceções; itens de Título (Possível duplicidade) ficam fora, porque não têm valor de Crédito. A agregação por Motivo lista sempre os oito Motivos na ordem da spec, inclusive os zerados, e a por canal lista sempre os quatro canais mais "canal não identificado". Franqueados e bancos são ordenados por concentração: quantidade de Créditos, depois valor, depois nome; o grupo "sem Franqueado" vem por último, fora da ordenação. Franqueado aparece com todos os seus nomes nos Sistemas de origem e a raiz. A aba "Causa raiz" vem depois da Lista de cobrança, com quatro blocos (Grupo, Quantidade, % quantidade, Valor, % valor) e uma linha Total de 100%; com a Fila vazia, os percentuais ficam vazios. O teste do comando que lista exatamente as abas passou a incluir "Causa raiz".
 - **Por quê:** a spec pede Motivos estáveis mês a mês e soma de 100% sobre os Créditos; quantidade mede o trabalho da Analista e o valor desempata; o grupo sem Franqueado não é alguém a abordar. "Possível fonte não integrada" aparece como categoria própria, mas nenhuma regra do motor atribui esse Motivo hoje: a spec não define como detectá-lo, e Conciliado fora é do ticket 13.
 - **Alternativas:** ordenar por valor; incluir itens de Título contando zero de valor; mostrar só categorias com ocorrência; inventar uma regra de detecção de fonte não integrada.
+
+## Ticket 11: gerador como módulo, proporções como frações dos Títulos
+
+- **Decisão:** o gerador é o módulo `conciliacao.gerador`, chamado por `gerar_dados_sinteticos(ConfiguracaoDoGerador(semente=...))`, sem comando de linha nem seção no `conciliacao.toml`. As proporções ficam na dataclass `Proporcoes` e são frações do número de Títulos (`unidade_norte` é fração dos Franqueados, só no Omie; `soma_de_titulos` conta Créditos, cada um pagando 2 ou 3 Títulos). O que sobra é pago por boleto em dia (Protheus) ou Pix/TED com CNPJ (Omie). Proporção fora de 0 a 1, frações de Títulos somando mais de 1 ou quantidade que os dados não comportam recusam a geração com `ConfiguracaoDoGeradorInvalida`, em vez de gerar menos casos sem avisar.
+- **Por quê:** a spec só pede semente fixa e proporções configuráveis para os testes; um terceiro comando não está na spec (dois comandos). Recusar segue o "nunca adivinhar" (ADR 0005).
+- **Alternativas:** comando `gerar-sinteticos` com TOML; gerar menos casos quando faltam Títulos.
+
+## Ticket 11: quatro contas no layout do Itaú
+
+- **Decisão:** os Extratos das 4 contas são todos no layout do Itaú, com 4 contas Itaú na configuração (`extrato_itau_<conta>_*.csv`). Liquidações de boleto entram na primeira conta; Pix, TED e depósitos em qualquer uma. Os primeiros débitos são uma tarifa no último dia útil de cada conta, para todas fecharem no mesmo dia.
+- **Por quê:** só existe adaptador do Itaú; inventar layouts dos outros 3 bancos violaria o "nunca inferir layout" e esses arquivos seriam recusados (spec, Out of Scope), e o critério pede arquivos aceitos sem ajuste.
+- **Alternativas:** layouts inventados para outros bancos (recusados hoje); uma conta só.
+
+## Ticket 11: gabarito garantido pela construção, com checagem conservadora
+
+- **Decisão:** cada Crédito é gerado a partir de um caso e o gabarito traz o destino, o Motivo, o Franqueado pagador, o nome do Extrato e os Títulos que ele realmente paga. Antes de aceitar um caso, o gerador confere: as opções do valor entre os Títulos do Franqueado (Título sozinho numa faixa acima do Encargo previsto de qualquer atraso dentro do mês, e somas exatas de 2 ou mais) são exatamente uma (Lista, nome truncado, abreviado e invertido) ou nenhuma (parcial por CNPJ, antecipação); o Nome por prefixo, com a normalização da plataforma, aponta só o Franqueado (truncado) ou nenhum (abreviado e invertido); nenhum Título é pago por dois Créditos. Se não passa, tenta outro Título. A IA falsa dos testes responde sim só para o nome do Extrato gerado a partir daquele Franqueado.
+- **Por quê:** o gabarito precisa ser verdade sem rodar o motor; a faixa larga só rejeita casos a mais, nunca aceita um ambíguo. A normalização é a definição de Nome por prefixo do CONTEXT, não regra do motor.
+- **Alternativas:** calcular o gabarito com o próprio motor (teste tautológico); confiar no acaso dos valores (colisões de soma e de Encargo acontecem com 1.900 Títulos).
+
+## Ticket 11: o que os testes de volume comparam
+
+- **Decisão:** na Lista de baixa, destino e Títulos de cada item precisam bater com o gabarito. Para todo lançamento, destino e Motivo precisam bater. Os Títulos sugeridos na Fila não são comparados. O teste de tempo aceita até 60 s; a execução com ~1.900 Títulos leva cerca de 2 s no M2.
+- **Por quê:** a sugestão de um Crédito que só bate por valor depende de outros Títulos que fecham por coincidência, e a spec só exige precisão na Lista. Comparar destino e Motivo de tudo garante que o gabarito descreve os casos que diz gerar.
+- **Alternativas:** comparar só a Lista (o gerador poderia gerar casos que nunca chegam ao destino pretendido); comparar também as sugestões da Fila.
+- **Exemplo que sai da regra:** a história 27 trata a antecipação como "Crédito sem título em aberto". Numa execução só, o Franqueado identificado sempre tem outros Títulos em aberto, então pela decisão do ticket 06 a antecipação vai como "valor não fecha", sem Título, e é isso que o gabarito espera.
