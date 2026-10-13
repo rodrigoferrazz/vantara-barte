@@ -16,6 +16,7 @@ from tests.arquivos import (
     escrever_omie,
     escrever_protheus,
 )
+from tests.parecerista import PareceristaFalso
 
 CNPJ_PROTHEUS = "10.200.300/0001-40"
 CNPJ_OMIE_FILIAL = "10200300000299"
@@ -33,7 +34,7 @@ def test_exportacao_omie_e_lida_como_vem_e_casa_por_cnpj_como_o_protheus(
     )
     escrever_extrato_itau(pasta, [LinhaItau("12/03/2025", "PIX RECEBIDO 10200300000140", "980,50")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.arquivos_recusados == ()
     [item] = resultado.lista_de_baixa
@@ -49,7 +50,7 @@ def test_atraso_em_titulo_do_omie_usa_o_vencimento_iso(pasta: Path, armazenament
     escrever_omie(pasta, [TituloOmie(documento="FAT-2025-0003", valor="1000.00", vencimento="2025-03-05")])
     escrever_extrato_itau(pasta, [LinhaItau("14/03/2025", "PIX RECEBIDO 10200300000140", "1.023,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [item] = resultado.lista_de_baixa
     assert [t.documento for t in item.titulos] == ["FAT-2025-0003"]
@@ -73,7 +74,7 @@ def test_exportacao_omie_fora_do_formato_e_recusada_com_motivo(
 ) -> None:
     escrever_omie(pasta, [titulo], nome="omie.csv")
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [recusado] = resultado.arquivos_recusados
     assert recusado.nome == "omie.csv"
@@ -100,7 +101,7 @@ def test_valor_unico_considera_os_titulos_do_franqueado_em_todos_os_sistemas(
         ],
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [ambiguo] = resultado.fila_de_excecoes
     assert ambiguo.motivo is MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO
@@ -129,7 +130,7 @@ def test_mesmo_franqueado_valor_e_vencimento_em_protheus_e_omie_vira_possivel_du
     )
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "TARIFA", "5,00", tipo="D")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [duplicidade] = resultado.itens_de_titulo
     assert duplicidade.motivo is MotivoDeNaoIdentificacao.POSSIVEL_DUPLICIDADE
@@ -157,7 +158,7 @@ def test_mesmo_valor_e_vencimento_no_mesmo_sistema_ou_em_franqueados_diferentes_
     )
     escrever_extrato_itau(pasta, [])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.itens_de_titulo == ()
 
@@ -175,7 +176,7 @@ def test_item_de_duplicidade_nao_entra_na_conferencia_de_soma_dos_creditos(
         ],
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
     caminho = tmp_path / "saida.xlsx"
     gerar_workbook(resultado, caminho)
 
@@ -207,8 +208,8 @@ def test_item_de_duplicidade_mantem_o_identificador_entre_execucoes(
     escrever_omie(pasta, [TituloOmie(documento="FAT-9601", valor="900.00", vencimento="2025-03-10")])
     escrever_extrato_itau(pasta, [])
 
-    primeira = executar_conciliacao(pasta, armazenamento, configuracao_itau())
-    segunda = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    primeira = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
+    segunda = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert [i.identificador for i in segunda.itens_de_titulo] == [i.identificador for i in primeira.itens_de_titulo]
     assert not primeira.itens_de_titulo[0].identificador.startswith("L")
@@ -222,12 +223,12 @@ def test_franqueado_guarda_os_nomes_de_cada_sistema_de_origem_entre_execucoes(
     escrever_protheus(julho, [TituloProtheus(documento="NF 1", valor="10,00", cliente="Padaria Teste Ltda")])
     escrever_omie(julho, [TituloOmie(documento="FAT-1", valor="20.00", cliente="PADARIA TESTE", cnpj=CNPJ_OMIE_FILIAL)])
     escrever_extrato_itau(julho, [])
-    executar_conciliacao(julho, armazenamento, configuracao_itau())
+    executar_conciliacao(julho, armazenamento, configuracao_itau(), PareceristaFalso())
     agosto = tmp_path / "agosto"
     agosto.mkdir()
     escrever_protheus(agosto, [TituloProtheus(documento="NF 2", valor="10,00", cliente="Padaria Teste Filial")])
     escrever_extrato_itau(agosto, [])
-    executar_conciliacao(agosto, armazenamento, configuracao_itau())
+    executar_conciliacao(agosto, armazenamento, configuracao_itau(), PareceristaFalso())
 
     franqueado = armazenamento.franqueados()["10200300"]
 

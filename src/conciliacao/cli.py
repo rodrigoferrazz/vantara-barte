@@ -6,6 +6,7 @@ from conciliacao.armazenamento import Armazenamento
 from conciliacao.conferencia import ConferenciaDeSomaFalhou
 from conciliacao.configuracao import ConfiguracaoInvalida, carregar_configuracao
 from conciliacao.execucao import executar_conciliacao
+from conciliacao.parecerista import parecerista_da_configuracao
 from conciliacao.saidas import gerar_workbook
 
 
@@ -31,7 +32,9 @@ def main(argumentos: list[str] | None = None) -> int:
 
     armazenamento = Armazenamento(opcoes.estado)
     try:
-        resultado = executar_conciliacao(opcoes.pasta, armazenamento, configuracao)
+        resultado = executar_conciliacao(
+            opcoes.pasta, armazenamento, configuracao, parecerista_da_configuracao(configuracao.ia)
+        )
     except ConferenciaDeSomaFalhou as erro:
         print(str(erro), file=sys.stderr)
         return 1

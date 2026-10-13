@@ -10,12 +10,15 @@ from conciliacao.dominio import (
     Lancamento,
     MotivoDeNaoIdentificacao,
     Natureza,
+    ParecerSobreFranqueado,
     PossivelDuplicidade,
+    Resposta,
     TipoDeEvidencia,
     Titulo,
 )
 from conciliacao.encargo import Pagamento, ParametrosDeEncargo, enquadrar
 from conciliacao.normalizacao import cnpjs_no_texto, formatar_reais, nome_normalizado, raiz_do_cnpj
+from conciliacao.parecerista import PareceristaDeNome
 
 type NomeDoPagador = Callable[[Lancamento], str | None]
 
@@ -79,10 +82,14 @@ class _Titulos:
     encargo: ParametrosDeEncargo
     nome_do_pagador: NomeDoPagador
     limite_de_combinacoes: int
+    parecerista: PareceristaDeNome
 
     @property
     def franqueados(self) -> set[str]:
         return {nome.raiz for nome in self.nomes}
+
+    def nomes_do_franqueado(self, raiz: str) -> list[str]:
+        return sorted({nome.nome for nome in self.nomes if nome.raiz == raiz})
 
     def que_fecham(self, titulos: list[Titulo], lancamento: Lancamento) -> list[tuple[Titulo, Pagamento]]:
         return [
@@ -148,6 +155,7 @@ def conciliar(
     encargo: ParametrosDeEncargo,
     nome_do_pagador: NomeDoPagador,
     limite_de_combinacoes: int,
+    parecerista: PareceristaDeNome,
 ) -> list[Classificacao]:
     todos = list(titulos)
     por_nosso_numero: dict[str, list[Titulo]] = defaultdict(list)
@@ -164,6 +172,7 @@ def conciliar(
         encargo,
         nome_do_pagador,
         limite_de_combinacoes,
+        parecerista,
     )
     return _sem_titulo_disputado_na_lista([_classificar(lancamento, abertos) for lancamento in lancamentos])
 
@@ -265,7 +274,9 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
     por_prefixo = [n for n in abertos.nomes if normalizado and n.normalizado.startswith(normalizado)]
     if nome and por_prefixo:
         return _por_nome(lancamento, nome, por_prefixo, abertos)
-    return _so_valor(lancamento, nome if normalizado else None, abertos)
+    if nome and normalizado:
+        return _por_parecer(lancamento, nome, abertos)
+    return _so_valor(lancamento, None, abertos)
 
 
 def _sem_identificacao(
@@ -332,6 +343,85 @@ def _por_nome(
         MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ,
         f"o valor {valor} é Valor único: {opcao.descrever()}; o nome ainda não é Pagador conhecido",
         tuple(titulo for titulo, _ in opcao.titulos),
+    )
+
+
+def _por_parecer(lancamento: Lancamento, nome: str, abertos: _Titulos) -> Classificacao:
+    candidatos = {
+        raiz: busca
+        for raiz, titulos in sorted(abertos.por_franqueado.items())
+        if (busca := abertos.buscar(titulos, lancamento)).fecha
+    }
+    if not candidatos:
+        return _so_valor(lancamento, nome, abertos)
+    valor = formatar_reais(lancamento.valor_centavos)
+    pareceres = tuple(
+        ParecerSobreFranqueado(raiz, abertos.parecerista.dar_parecer(nome, abertos.nomes_do_franqueado(raiz)))
+        for raiz in candidatos
+    )
+    identificacao = (
+        f"Nome '{nome}' do Extrato não é Nome por prefixo de nenhum nome de Franqueado; parecer da IA sobre os "
+        f"Franqueados com que o valor {valor} fecha: {'; '.join(p.descrever() for p in pareceres)}"
+    )
+
+    def fila(
+        motivo: MotivoDeNaoIdentificacao,
+        explicacao: str,
+        evidencia: TipoDeEvidencia,
+        sugeridos: tuple[Titulo, ...] = (),
+    ) -> Classificacao:
+        return Classificacao(
+            lancamento=lancamento,
+            destino=Destino.FILA_DE_EXCECOES,
+            titulos=sugeridos,
+            explicacao=f"{identificacao}. {explicacao}.",
+            motivo=motivo,
+            evidencia=(evidencia,),
+            pareceres=pareceres,
+        )
+
+    respostas = {p.parecer.resposta for p in pareceres}
+    confirmados = [p.franqueado for p in pareceres if p.parecer.resposta is Resposta.SIM]
+    if Resposta.INDISPONIVEL in respostas or not confirmados:
+        busca = _Busca(
+            tuple(opcao for busca in candidatos.values() for opcao in busca.opcoes),
+            any(busca.limite_atingido for busca in candidatos.values()),
+            abertos.limite_de_combinacoes,
+        )
+        sem_parecer = "IA indisponível; o nome fica sem parecer" if Resposta.INDISPONIVEL in respostas else "A IA negou"
+        if opcao := busca.unica:
+            return fila(
+                MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
+                f"{sem_parecer}; só o valor {valor} aponta {opcao.descrever()}",
+                TipoDeEvidencia.SO_VALOR,
+                tuple(titulo for titulo, _ in opcao.titulos),
+            )
+        return fila(
+            MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
+            f"{sem_parecer}; só o valor {valor} {busca.descrever_ambiguidade()}",
+            TipoDeEvidencia.SO_VALOR,
+        )
+    if len(confirmados) > 1:
+        return fila(
+            MotivoDeNaoIdentificacao.NOME_AMBIGUO,
+            f"A IA diz que o nome é de mais de um Franqueado: raízes {', '.join(confirmados)}",
+            TipoDeEvidencia.PARECER_DE_LLM,
+        )
+    [franqueado] = confirmados
+    busca = candidatos[franqueado]
+    if opcao := busca.unica:
+        return fila(
+            MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ,
+            f"Pelo parecer da IA, o valor {valor} é Valor único do Franqueado de raiz {franqueado}: "
+            f"{opcao.descrever()}; o nome ainda não é Pagador conhecido",
+            TipoDeEvidencia.PARECER_DE_LLM,
+            tuple(titulo for titulo, _ in opcao.titulos),
+        )
+    return fila(
+        MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+        f"Pelo parecer da IA o pagador é o Franqueado de raiz {franqueado}, mas o valor {valor} "
+        f"{busca.descrever_ambiguidade()}",
+        TipoDeEvidencia.PARECER_DE_LLM,
     )
 
 

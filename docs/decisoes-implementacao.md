@@ -213,3 +213,40 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** a spec restringe a soma ao mesmo Franqueado; sem pagador não há Franqueado, e somar Títulos de todos os Franqueados é o que a spec pede para evitar. O filtro por valor antes do parecer da LLM (ticket 08) pode reutilizar a busca por Franqueado candidato.
 - **Alternativas:** procurar somas em cada Franqueado para Créditos só por valor.
 - **Exemplo que sai da regra por enquanto:** na amostra, o TED de 14/07 (47.630,50, nome que não é prefixo) aparece com a sugestão de NF 104533 + NF 104588; hoje fica sem sugestão, como "sem identificação do pagador", até o ticket 08 aplicar o filtro por valor com somas ao Franqueado candidato da LLM.
+
+## Ticket 08: quando a IA é chamada e sobre quais Franqueados
+
+- **Decisão:** a IA só é chamada para Crédito com nome do pagador que não é Nome por prefixo de nenhum Franqueado. Os candidatos são os Franqueados com que o valor fecha pela mesma busca da identificação por nome: Título sozinho considerando o Encargo, soma exata de Títulos do Franqueado, ou limite da busca atingido. A IA recebe o nome do Extrato e todos os nomes do candidato em todos os Sistemas de origem, uma chamada por candidato. Sem candidato, não há chamada e o Crédito segue como "sem identificação do pagador". Nome que é prefixo de algum Franqueado continua no caminho do ticket 06, sem IA, mesmo quando o valor fecha só com outro Franqueado.
+- **Por quê:** a spec manda filtrar por valor antes do parecer e restringir somas ao mesmo Franqueado; reutilizar a busca do ticket 07 mantém as duas identificações coerentes. Manter o caminho do prefixo preserva a precedência já decidida no ticket 06 ("valor não fecha" antes de qualquer outro Motivo).
+- **Alternativas:** perguntar à IA sobre todos os Franqueados (custo e risco de a IA escolher entre muitos); chamar a IA também quando o nome é prefixo de um Franqueado cujo valor não fecha.
+
+## Ticket 08: destino conforme o parecer
+
+- **Decisão:** tudo que passa pela IA vai para a Fila. Sim para um só candidato: com Valor único dele, "pagador provável, primeira vez" sugerindo o Título ou a combinação; com várias opções ou limite atingido, "mais de uma combinação possível" sem sugestão. Sim para mais de um candidato: "nome ambíguo" sem sugestão. Nenhum sim: "sem identificação do pagador" com a sugestão por valor, que é a única opção entre todos os candidatos (Título sozinho ou soma), ou nenhuma quando há mais de uma. A evidência é "parecer de LLM" quando há sim e "só valor" quando não há.
+- **Por quê:** o parecer positivo ocupa o lugar do Nome por prefixo; o item fica na Fila só por falta de confirmação do nome (história 40). O parecer negativo não é evidência da sugestão, por isso a evidência volta a ser só valor.
+- **Alternativas:** parecer positivo como "nome ambíguo" sempre (perderia a métrica do que o aprendizado resolve); sugestão por valor só com Títulos sozinhos, como no Crédito sem nome (perderia a soma do Franqueado candidato).
+
+## Ticket 08: IA indisponível
+
+- **Decisão:** cada parecer é sim, não ou "IA indisponível", com modelo e versão do prompt, guardado por Franqueado candidato numa tabela própria `itens_pareceres`. Ollama fora do ar, erro HTTP, tempo esgotado ou resposta fora do formato pedido viram "IA indisponível" com o motivo. Se algum candidato ficou sem parecer, o item inteiro é tratado como sem parecer: "sem identificação do pagador" com a sugestão por valor, marcado "IA indisponível". A marca do item e as contagens do Resumo são derivadas dos pareceres guardados. A plataforma tenta a IA em cada Crédito, sem desistir depois da primeira falha.
+- **Por quê:** um sim ao lado de um candidato sem resposta não garante que o nome não é também do outro; tratar resposta malformada como indisponível evita decidir com base em texto que não seguiu o formato. Tabela nova não exige migração (mesmo padrão do ticket 06).
+- **Alternativas:** usar os pareceres que vieram e ignorar os indisponíveis; parar de chamar a IA depois da primeira falha na execução (uma falha passageira marcaria todo o resto).
+
+## Ticket 08: configuração da IA
+
+- **Decisão:** seção `[ia]` do `conciliacao.toml` com `endereco`, `modelo` e `tempo_limite_segundos`, todos obrigatórios dentro da seção e campo desconhecido recusado. Sem a seção, a execução roda e os itens que precisariam de parecer ficam "IA indisponível" com o motivo "falta a seção [ia] na configuração". O padrão do projeto é `qwen2.5:3b` (cerca de 2 GB, cabe no M2 de 8 GB) com tempo limite de 120 s, que cobre o carregamento do modelo na primeira chamada.
+- **Por quê:** endereço e modelo não podem estar no código; a falta da IA nunca para a conciliação, e o Resumo mostra a situação.
+- **Alternativas:** recusar a configuração sem `[ia]` (pararia a execução por causa da IA); valores padrão no código.
+
+## Ticket 08: parecer no workbook e no Resumo
+
+- **Decisão:** a aba Fila de exceções ganha a coluna "Parecer da IA" no fim, com Franqueado, resposta, explicação, modelo e versão do prompt de cada parecer; a explicação do item também cita o parecer. O Resumo ganha a linha "IA (parecer de nome)": funcionando com N itens, indisponível com N itens marcados, ou não foi necessária.
+- **Por quê:** a spec pede o parecer exibido e destacado no item e o Resumo dizendo se a IA estava funcionando. Coluna no fim não mexe nas colunas existentes.
+- **Alternativas:** parecer só dentro da explicação (não fica destacado).
+
+## Ticket 08: prompt e teste de integração
+
+- **Decisão:** o prompt (versão `nome-v1`) pede comparação palavra por palavra, aceitando abreviação como começo da palavra e ignorando palavras genéricas, com saída estruturada `{explicacao, pertence}` (explicação antes da resposta) e temperatura 0. O teste que chama o Ollama real é marcado `integracao`, fica fora da suíte padrão (`uv run pytest -m integracao` para rodar) e é pulado se o Ollama ou o modelo não estiver disponível.
+- **Por quê:** num conjunto de 9 pares de nomes inventados, o `qwen2.5:3b` acertou 6 com esse prompt; com a primeira versão, que só descrevia a tarefa, respondia sim para todos os nomes sem relação. Errar para "não" mantém a sugestão por valor e só muda o Motivo; errar para "sim" daria um "pagador provável" falso.
+- **Alternativas:** exemplos dentro do prompt (few-shot), que pioraram para 4 de 9; modelo maior (não cabe no M2 de 8 GB com folga).
+- **Exemplo que sai da regra:** na amostra, a spec espera "pagador provável, primeira vez" com parecer positivo para TED DOCE PONTO COM ALIME e PIX SABOR CIA. O `qwen2.5:3b` com este prompt responde "não" nos dois, então ficam "sem identificação do pagador", mantendo as sugestões NF 104533 + NF 104588 e NF 104552. É limitação do modelo, não da regra; o prompt não foi ajustado aos nomes da amostra.

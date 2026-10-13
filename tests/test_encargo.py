@@ -9,6 +9,7 @@ from conciliacao.dominio import Item, MotivoDeNaoIdentificacao, Resultado
 from conciliacao.encargo import ParametrosDeEncargo
 from conciliacao.execucao import executar_conciliacao
 from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
+from tests.parecerista import PareceristaFalso
 
 NOSSO_NUMERO = "000077700011"
 
@@ -28,7 +29,7 @@ def _pagar_por_nosso_numero(
         [TituloProtheus(documento="NF 940001", valor=valor_do_titulo, nosso_numero=NOSSO_NUMERO, vencimento=vencimento)],
     )
     escrever_extrato_itau(pasta, [LinhaItau(data, "LIQUIDACAO COBRANCA SIMPLES", valor_pago, documento=NOSSO_NUMERO)])
-    return executar_conciliacao(pasta, armazenamento, configuracao_itau(encargo=encargo))
+    return executar_conciliacao(pasta, armazenamento, configuracao_itau(encargo=encargo), PareceristaFalso())
 
 
 def _na_lista(resultado: Resultado) -> Item:
@@ -230,7 +231,7 @@ def test_cnpj_com_valor_dentro_do_encargo_vai_para_a_lista(pasta: Path, armazena
     )
     escrever_extrato_itau(pasta, [LinhaItau("12/03/2025", "TED CNPJ 10200300000140", "5.100,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.fila_de_excecoes == []
     [item] = resultado.lista_de_baixa
@@ -245,7 +246,7 @@ def test_cnpj_com_valor_original_atrasado_vai_para_a_lista_com_encargo_nao_pago(
     escrever_protheus(pasta, [TituloProtheus(documento="NF 940111", valor="5.000,00", vencimento="10/03/2025")])
     escrever_extrato_itau(pasta, [LinhaItau("12/03/2025", "PIX RECEBIDO 10200300000140", "5.000,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [item] = resultado.lista_de_baixa
     assert "Encargo não pago" in item.explicacao
@@ -263,7 +264,7 @@ def test_cnpj_com_valor_que_fecha_com_mais_de_um_titulo_considerando_o_encargo_v
     )
     escrever_extrato_itau(pasta, [LinhaItau("12/03/2025", "PIX RECEBIDO 10200300000140", "5.100,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes

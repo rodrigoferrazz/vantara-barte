@@ -7,6 +7,7 @@ from conciliacao.configuracao import ConfiguracaoInvalida, carregar_configuracao
 from conciliacao.dominio import Item, MotivoDeNaoIdentificacao, Resultado, TipoDeEvidencia
 from conciliacao.execucao import executar_conciliacao
 from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
+from tests.parecerista import PareceristaFalso
 
 CNPJ_A = "10.200.300/0001-40"
 CNPJ_B = "20.400.600/0001-80"
@@ -21,7 +22,7 @@ def _titulos_do_a(*valores: str, vencimento: str = "05/03/2025") -> list[TituloP
 
 
 def _executar(pasta: Path, armazenamento: Armazenamento, limite_de_combinacoes: int = 100_000) -> Resultado:
-    return executar_conciliacao(pasta, armazenamento, configuracao_itau(limite_de_combinacoes=limite_de_combinacoes))
+    return executar_conciliacao(pasta, armazenamento, configuracao_itau(limite_de_combinacoes=limite_de_combinacoes), PareceristaFalso())
 
 
 def _unico_da_fila(resultado: Resultado) -> Item:

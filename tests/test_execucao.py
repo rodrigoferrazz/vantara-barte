@@ -9,6 +9,7 @@ from conciliacao.dominio import MotivoDeNaoIdentificacao
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.motor import conciliar
 from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
+from tests.parecerista import PareceristaFalso
 
 
 def test_liquidacao_com_nosso_numero_e_valor_exato_vai_para_a_lista_com_explicacao(
@@ -17,7 +18,7 @@ def test_liquidacao_com_nosso_numero_e_valor_exato_vai_para_a_lista_com_explicac
     escrever_protheus(pasta, [TituloProtheus(documento="NF 900001", valor="1.234,56", nosso_numero="000077700011")])
     escrever_extrato_itau(pasta, [LinhaItau("06/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "1.234,56", documento="000077700011")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert len(resultado.lista_de_baixa) == 1
     item = resultado.lista_de_baixa[0]
@@ -39,7 +40,7 @@ def test_debitos_e_tarifas_vao_para_fora_do_escopo(pasta: Path, armazenamento: A
         ],
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert [item.lancamento.historico for item in resultado.fora_do_escopo] == [
         "TARIFA MANUTENCAO CONTA",
@@ -59,7 +60,7 @@ def test_credito_sem_nosso_numero_de_titulo_vai_para_a_fila_com_motivo(pasta: Pa
         ],
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     assert len(resultado.fila_de_excecoes) == 2
@@ -72,7 +73,7 @@ def test_nosso_numero_com_valor_diferente_vai_para_a_fila_sugerindo_o_titulo(
     escrever_protheus(pasta, [TituloProtheus(documento="NF 900004", valor="2.000,00", nosso_numero="000077700044")])
     escrever_extrato_itau(pasta, [LinhaItau("07/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "1.500,00", documento="000077700044")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
@@ -90,7 +91,7 @@ def test_nosso_numero_de_mais_de_um_titulo_nao_vai_para_a_lista(pasta: Path, arm
     )
     escrever_extrato_itau(pasta, [LinhaItau("07/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "300,00", documento="000077700055")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     assert len(resultado.fila_de_excecoes) == 1
@@ -101,12 +102,12 @@ def test_reimportar_periodo_sobreposto_nao_duplica_creditos(pasta: Path, armazen
     liquidacao = LinhaItau("10/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "410,00", documento="000077700077")
     pix = LinhaItau("12/03/2025", "PIX RECEBIDO BELTRANO", "95,00")
     escrever_extrato_itau(pasta, [liquidacao, pix], nome="itau_cobranca_1a15.csv")
-    primeira = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    primeira = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     escrever_extrato_itau(
         pasta, [pix, LinhaItau("18/03/2025", "PIX RECEBIDO CICLANO", "60,00")], nome="itau_cobranca_10a31.csv"
     )
-    segunda = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    segunda = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert primeira.resumo.lancamentos_novos == 2
     assert segunda.resumo.lancamentos_novos == 1
@@ -122,8 +123,8 @@ def test_duas_linhas_identicas_no_mesmo_dia_viram_dois_creditos(pasta: Path, arm
     repetida = LinhaItau("14/03/2025", "PIX RECEBIDO BELTRANO", "95,00")
     escrever_extrato_itau(pasta, [repetida, repetida])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
-    reexecucao = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
+    reexecucao = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert len(resultado.fila_de_excecoes) == 2
     assert len({item.identificador for item in resultado.fila_de_excecoes}) == 2
@@ -144,7 +145,7 @@ def test_banco_e_conta_do_extrato_vem_da_configuracao_pelo_nome_do_arquivo(
         )
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao)
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao, PareceristaFalso())
 
     assert sorted(item.lancamento.conta for item in resultado.fila_de_excecoes) == ["1111-1", "2222-2"]
     assert {item.lancamento.banco for item in resultado.fila_de_excecoes} == {"itau"}
@@ -154,7 +155,7 @@ def test_extrato_com_nome_fora_da_configuracao_nao_entra(pasta: Path, armazename
     escrever_protheus(pasta, [])
     escrever_extrato_itau(pasta, [LinhaItau("14/03/2025", "PIX RECEBIDO BELTRANO", "95,00")], nome="extrato_sem_conta.csv")
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.itens == ()
     assert [recusado.nome for recusado in resultado.arquivos_recusados] == ["extrato_sem_conta.csv"]
@@ -171,9 +172,9 @@ def test_conferencia_de_soma_que_nao_fecha_para_a_execucao_sem_guardar_nada(
     monkeypatch.setattr("conciliacao.execucao.conciliar", lambda *args: conciliar(*args)[1:])
 
     with pytest.raises(ConferenciaDeSomaFalhou, match="R\\$ 96,00"):
-        executar_conciliacao(pasta, armazenamento, configuracao_itau())
+        executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     monkeypatch.undo()
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
     assert resultado.resumo.lancamentos_novos == 2
     assert resultado.resumo.execucao == 1

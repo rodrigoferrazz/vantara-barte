@@ -6,13 +6,13 @@
 
 **Status:** ready-for-agent
 
-- [ ] O Parecerista de nome é uma interface com implementação Ollama e uma falsa determinística para os testes
-- [ ] A LLM só é chamada para nomes que não são prefixo de nenhum nome do Franqueado; nomes por prefixo não a chamam
-- [ ] Resposta estruturada com sim/não e explicação, exibida no item da Fila
-- [ ] Parecer negativo resulta em Motivo 'sem identificação do pagador' mantendo a sugestão por valor
-- [ ] Com Ollama indisponível a execução termina, os itens ficam marcados 'IA indisponível' e o Resumo mostra isso
-- [ ] Cada parecer registra modelo e versão do prompt
-- [ ] Um teste de integração chama o Ollama real e é pulado se ele não estiver rodando
-- [ ] Modelo padrão cabe num MacBook Air M2 de 8 GB
+- [x] O Parecerista de nome é uma interface com implementação Ollama e uma falsa determinística para os testes
+- [x] A LLM só é chamada para nomes que não são prefixo de nenhum nome do Franqueado; nomes por prefixo não a chamam
+- [x] Resposta estruturada com sim/não e explicação, exibida no item da Fila
+- [x] Parecer negativo resulta em Motivo 'sem identificação do pagador' mantendo a sugestão por valor
+- [x] Com Ollama indisponível a execução termina, os itens ficam marcados 'IA indisponível' e o Resumo mostra isso
+- [x] Cada parecer registra modelo e versão do prompt
+- [x] Um teste de integração chama o Ollama real e é pulado se ele não estiver rodando
+- [x] Modelo padrão cabe num MacBook Air M2 de 8 GB
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

@@ -4,7 +4,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from conciliacao.dominio import ArquivoRecusado, Destino, Item, ItemDeTitulo, Resultado, Titulo
+from conciliacao.dominio import ArquivoRecusado, Destino, Item, ItemDeTitulo, Resultado, Resumo, Titulo
 from conciliacao.normalizacao import formatar_reais
 
 _FORMATO_DE_VALOR = "#,##0.00"
@@ -20,7 +20,9 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     _aba_de_itens(workbook.create_sheet(Destino.LISTA_DE_BAIXA.value), resultado.lista_de_baixa, ("Títulos", "Explicação"))
     fila = workbook.create_sheet(Destino.FILA_DE_EXCECOES.value)
     _aba_de_itens(
-        fila, resultado.fila_de_excecoes, ("Motivo", "Títulos sugeridos", "Evidência", "O que falta", "Explicação")
+        fila,
+        resultado.fila_de_excecoes,
+        ("Motivo", "Títulos sugeridos", "Evidência", "O que falta", "Explicação", "Parecer da IA"),
     )
     _acrescentar_itens_de_titulo(fila, resultado.itens_de_titulo)
     _aba_de_itens(workbook.create_sheet(Destino.FORA_DO_ESCOPO.value), resultado.fora_do_escopo, ("Explicação",))
@@ -41,8 +43,20 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
     for destino, total in resumo.totais.items():
         aba.append((destino.value, f"{total.quantidade} lançamento(s), {formatar_reais(total.valor_centavos)}"))
     aba.append(("Itens de Título na Fila", len(resultado.itens_de_titulo)))
+    aba.append(("IA (parecer de nome)", _situacao_da_ia(resumo)))
     aba.column_dimensions["A"].width = 32
     aba.column_dimensions["B"].width = 60
+
+
+def _situacao_da_ia(resumo: Resumo) -> str:
+    if resumo.itens_ia_indisponivel:
+        return (
+            f"indisponível: {resumo.itens_ia_indisponivel} item(ns) da Fila sem parecer, marcados 'IA indisponível'; "
+            f"{resumo.itens_com_parecer} item(ns) com parecer"
+        )
+    if resumo.itens_com_parecer:
+        return f"funcionando: {resumo.itens_com_parecer} item(ns) da Fila com parecer"
+    return "não foi necessária nesta execução"
 
 
 def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[str, ...]) -> None:
@@ -56,6 +70,7 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
             "Evidência": "; ".join(tipo.value for tipo in item.evidencia),
             "O que falta": item.o_que_falta,
             "Explicação": item.explicacao,
+            "Parecer da IA": "; ".join(parecer.descrever() for parecer in item.pareceres),
         }
         aba.append(
             (

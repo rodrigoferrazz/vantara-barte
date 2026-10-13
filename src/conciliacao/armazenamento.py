@@ -16,7 +16,10 @@ from conciliacao.dominio import (
     Lancamento,
     MotivoDeNaoIdentificacao,
     Natureza,
+    Parecer,
+    ParecerSobreFranqueado,
     PossivelDuplicidade,
+    Resposta,
     Resultado,
     Resumo,
     TipoDeEvidencia,
@@ -70,6 +73,14 @@ CREATE TABLE IF NOT EXISTS itens (
 CREATE TABLE IF NOT EXISTS itens_evidencias (
     item_id INTEGER NOT NULL REFERENCES itens(id),
     tipo TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS itens_pareceres (
+    item_id INTEGER NOT NULL REFERENCES itens(id),
+    franqueado TEXT NOT NULL,
+    resposta TEXT NOT NULL,
+    explicacao TEXT NOT NULL,
+    modelo TEXT NOT NULL,
+    versao_do_prompt TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS itens_titulos (
     item_id INTEGER NOT NULL REFERENCES itens(id),
@@ -190,6 +201,21 @@ class Armazenamento:
                 [(item, tipo.value) for tipo in classificacao.evidencia],
             )
             self._conexao.executemany(
+                "INSERT INTO itens_pareceres (item_id, franqueado, resposta, explicacao, modelo, versao_do_prompt)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        item,
+                        p.franqueado,
+                        p.parecer.resposta.value,
+                        p.parecer.explicacao,
+                        p.parecer.modelo,
+                        p.parecer.versao_do_prompt,
+                    )
+                    for p in classificacao.pareceres
+                ],
+            )
+            self._conexao.executemany(
                 "INSERT INTO itens_titulos (item_id, titulo_id) VALUES (?, ?)",
                 [(item, id_do_titulo[titulo]) for titulo in classificacao.titulos],
             )
@@ -251,6 +277,8 @@ class Armazenamento:
             arquivos_recusados=tuple(ArquivoRecusado(nome, motivo) for nome, motivo in arquivos if motivo is not None),
             lancamentos_novos=lancamentos_novos,
             totais=totais,
+            itens_com_parecer=sum(1 for item in itens if item.pareceres and not item.ia_indisponivel),
+            itens_ia_indisponivel=sum(1 for item in itens if item.ia_indisponivel),
         )
         return Resultado(resumo=resumo, itens=itens, itens_de_titulo=tuple(self._itens_de_titulo(execucao)))
 
@@ -283,7 +311,19 @@ class Armazenamento:
                 explicacao=explicacao,
                 motivo=MotivoDeNaoIdentificacao(motivo) if motivo else None,
                 evidencia=self._evidencia(item_id),
+                pareceres=self._pareceres(item_id),
             )
+
+    def _pareceres(self, item_id: int) -> tuple[ParecerSobreFranqueado, ...]:
+        linhas = self._conexao.execute(
+            "SELECT franqueado, resposta, explicacao, modelo, versao_do_prompt FROM itens_pareceres"
+            " WHERE item_id = ? ORDER BY rowid",
+            (item_id,),
+        )
+        return tuple(
+            ParecerSobreFranqueado(franqueado, Parecer(Resposta(resposta), explicacao, modelo, versao))
+            for franqueado, resposta, explicacao, modelo, versao in linhas
+        )
 
     def _evidencia(self, item_id: int) -> tuple[TipoDeEvidencia, ...]:
         linhas = self._conexao.execute("SELECT tipo FROM itens_evidencias WHERE item_id = ? ORDER BY rowid", (item_id,))

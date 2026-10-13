@@ -15,13 +15,14 @@ from tests.arquivos import (
     escrever_omie,
     escrever_protheus,
 )
+from tests.parecerista import PareceristaFalso
 
 CNPJ_A = "10.200.300/0001-40"
 CNPJ_B = "20.400.600/0001-80"
 
 
 def _unico_da_fila(pasta: Path, armazenamento: Armazenamento) -> Item:
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
     return item
@@ -200,7 +201,7 @@ def test_credito_sem_titulo_em_aberto_precede_nome_ambiguo_e_pagador_provavel(
         ],
     )
     escrever_extrato_itau(julho, [])
-    executar_conciliacao(julho, armazenamento, configuracao_itau())
+    executar_conciliacao(julho, armazenamento, configuracao_itau(), PareceristaFalso())
     agosto = tmp_path / "agosto"
     agosto.mkdir()
     escrever_protheus(agosto, [TituloProtheus(documento="NF 9", valor="1.850,00", cnpj="30.600.900/0001-10")])
@@ -212,7 +213,7 @@ def test_credito_sem_titulo_em_aberto_precede_nome_ambiguo_e_pagador_provavel(
         ],
     )
 
-    resultado = executar_conciliacao(agosto, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(agosto, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     assert [item.motivo for item in resultado.fila_de_excecoes] == [
@@ -242,7 +243,7 @@ def test_cada_item_da_fila_tem_um_motivo_titulo_sugerido_evidencia_e_o_que_falta
         ],
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
     caminho = tmp_path / "saida.xlsx"
     gerar_workbook(resultado, caminho)
 

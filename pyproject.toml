@@ -23,6 +23,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not integracao'"
+markers = ["integracao: chama serviços reais, como o Ollama; rode com -m integracao"]
 
 [tool.mypy]
 strict = true

@@ -6,9 +6,12 @@ from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
 from conciliacao.dominio import Lancamento, Natureza, Resultado
 from conciliacao.motor import conciliar, possiveis_duplicidades
+from conciliacao.parecerista import PareceristaDeNome
 
 
-def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao: Configuracao) -> Resultado:
+def executar_conciliacao(
+    pasta: Path, armazenamento: Armazenamento, configuracao: Configuracao, parecerista: PareceristaDeNome
+) -> Resultado:
     leitura = ler_pasta(pasta, configuracao)
     with armazenamento.transacao():
         identificadores, novos = armazenamento.guardar_lancamentos(leitura.lancamentos)
@@ -24,6 +27,7 @@ def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao
             configuracao.encargo,
             nome_do_pagador,
             configuracao.limite_de_combinacoes,
+            parecerista,
         )
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}

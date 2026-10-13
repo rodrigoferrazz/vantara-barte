@@ -15,3 +15,10 @@ tolerancia_reais = 0.00
 # Atingido o limite, o Crédito vai para a Fila como "mais de uma combinação possível".
 [somas]
 limite_de_combinacoes = 100000
+
+# LLM local via Ollama que só dá parecer sobre o nome do pagador (ADR 0003). O modelo de 3B quantizado (~2 GB)
+# cabe num MacBook Air M2 de 8 GB. Sem esta seção, os itens que precisariam de parecer ficam marcados "IA indisponível".
+[ia]
+endereco = "http://localhost:11434"
+modelo = "qwen2.5:3b"
+tempo_limite_segundos = 120

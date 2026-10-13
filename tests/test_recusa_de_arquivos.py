@@ -14,6 +14,7 @@ from tests.arquivos import (
     escrever_extrato_itau,
     escrever_protheus,
 )
+from tests.parecerista import PareceristaFalso
 
 _CREDITO = LinhaItau("14/03/2025", "PIX RECEBIDO BELTRANO", "95,00").linha()
 
@@ -42,7 +43,7 @@ def test_extrato_com_coluna_diferente_e_recusado_citando_a_diferenca(
 ) -> None:
     _escrever(pasta, "itau_cobranca.csv", cabecalho, linha)
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     motivo = _motivo(resultado.arquivos_recusados, "itau_cobranca.csv")
     assert "Itaú" in motivo
@@ -58,7 +59,7 @@ def test_arquivo_sem_semelhanca_com_nenhum_layout_e_recusado_com_motivo(
     (pasta / "planilha.xlsx").write_bytes(b"PK\x03\x04\xff\xfe\x00")
     (pasta / "vazio.csv").write_text("", encoding="utf-8")
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert "cabeçalho" in _motivo(resultado.arquivos_recusados, "titulos_outra_unidade.csv")
     assert _motivo(resultado.arquivos_recusados, "planilha.xlsx")
@@ -80,7 +81,7 @@ def test_extrato_com_formato_inesperado_e_recusado_inteiro_sem_processar_parcial
 ) -> None:
     escrever_extrato_itau(pasta, [LinhaItau("14/03/2025", "PIX RECEBIDO BELTRANO", "95,00"), linha_ruim])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     motivo = _motivo(resultado.arquivos_recusados, "itau_cobranca.csv")
     assert "linha 3" in motivo
@@ -101,7 +102,7 @@ def test_protheus_com_valor_em_formato_inesperado_e_recusado_inteiro(
     )
     escrever_extrato_itau(pasta, [LinhaItau("06/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "100,00", documento="000066600011")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert "R$ 200,00" in _motivo(resultado.arquivos_recusados, "receber_protheus.csv")
     assert resultado.lista_de_baixa == []
@@ -118,7 +119,7 @@ def test_protheus_com_cnpj_em_formato_inesperado_e_recusado_inteiro(pasta: Path,
     )
     escrever_extrato_itau(pasta, [LinhaItau("06/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "100,00", documento="000066600021")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert "10.200.300/0001" in _motivo(resultado.arquivos_recusados, "receber_protheus.csv")
     assert resultado.lista_de_baixa == []
@@ -133,7 +134,7 @@ def test_extrato_de_banco_sem_adaptador_e_recusado_com_motivo(pasta: Path, armaz
         )
     )
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao)
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao, PareceristaFalso())
 
     motivo = _motivo(resultado.arquivos_recusados, "bradesco_conta.csv")
     assert "bradesco" in motivo
@@ -143,7 +144,7 @@ def test_extrato_de_banco_sem_adaptador_e_recusado_com_motivo(pasta: Path, armaz
 def test_extrato_com_nome_fora_da_configuracao_e_recusado_com_motivo(pasta: Path, armazenamento: Armazenamento) -> None:
     escrever_extrato_itau(pasta, [LinhaItau("14/03/2025", "PIX RECEBIDO BELTRANO", "95,00")], nome="extrato_sem_conta.csv")
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert "configuração" in _motivo(resultado.arquivos_recusados, "extrato_sem_conta.csv")
 
@@ -163,7 +164,7 @@ def test_demais_arquivos_sao_processados_e_a_conferencia_considera_so_os_aceitos
     escrever_extrato_itau(pasta, [LinhaItau("07/03/2025", "PIX RECEBIDO FULANO", "9.999,00")], nome="sem_conta.csv")
     _escrever(pasta, "itau_cobranca_quebrado.csv", CABECALHO_ITAU, "07/03/2025;PIX RECEBIDO CICLANO;;8.888,00;C;extra")
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.resumo.arquivos_lidos == ("itau_cobranca_marco.csv", "receber_protheus.csv")
     assert sorted(r.nome for r in resultado.arquivos_recusados) == ["itau_cobranca_quebrado.csv", "sem_conta.csv"]
@@ -178,6 +179,6 @@ def test_demais_arquivos_sao_processados_e_a_conferencia_considera_so_os_aceitos
 def test_coluna_repetida_e_citada_como_a_mais(pasta: Path, armazenamento: Armazenamento) -> None:
     _escrever(pasta, "itau_cobranca.csv", "data;data;historico;documento;valor;tipo", "14/03/2025;" + _CREDITO)
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert "a mais 'data'" in _motivo(resultado.arquivos_recusados, "itau_cobranca.csv")

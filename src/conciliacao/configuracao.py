@@ -18,10 +18,18 @@ class ContaDeExtrato:
 
 
 @dataclass(frozen=True)
+class ConfiguracaoDaIa:
+    endereco: str
+    modelo: str
+    tempo_limite_segundos: float
+
+
+@dataclass(frozen=True)
 class Configuracao:
     contas: tuple[ContaDeExtrato, ...]
     encargo: ParametrosDeEncargo = ParametrosDeEncargo()
     limite_de_combinacoes: int = 100_000
+    ia: ConfiguracaoDaIa | None = None
 
 
 def carregar_configuracao(caminho: Path) -> Configuracao:
@@ -37,7 +45,25 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
         contas=tuple(_conta(caminho, conta) for conta in contas),
         encargo=_encargo(caminho, dados.get("encargo", {})),
         limite_de_combinacoes=_limite_de_combinacoes(caminho, dados.get("somas", {})),
+        ia=_ia(caminho, dados["ia"]) if "ia" in dados else None,
     )
+
+
+_CAMPOS_DA_IA = ("endereco", "modelo", "tempo_limite_segundos")
+
+
+def _ia(caminho: Path, ia: object) -> ConfiguracaoDaIa:
+    if not isinstance(ia, dict):
+        raise ConfiguracaoInvalida(f"{caminho}: [ia] precisa ser uma seção")
+    desconhecidos = sorted(set(ia) - set(_CAMPOS_DA_IA))
+    if desconhecidos:
+        raise ConfiguracaoInvalida(f"{caminho}: [ia] não conhece {', '.join(desconhecidos)}; use {', '.join(_CAMPOS_DA_IA)}")
+    endereco, modelo, tempo_limite = ia.get("endereco"), ia.get("modelo"), ia.get("tempo_limite_segundos")
+    if not isinstance(endereco, str) or not endereco or not isinstance(modelo, str) or not modelo:
+        raise ConfiguracaoInvalida(f"{caminho}: [ia] precisa de endereco e modelo como texto")
+    if isinstance(tempo_limite, bool) or not isinstance(tempo_limite, int | float) or tempo_limite <= 0:
+        raise ConfiguracaoInvalida(f"{caminho}: [ia] tempo_limite_segundos precisa ser um número maior que zero")
+    return ConfiguracaoDaIa(endereco=endereco, modelo=modelo, tempo_limite_segundos=float(tempo_limite))
 
 
 def _conta(caminho: Path, conta: object) -> ContaDeExtrato:

@@ -54,6 +54,34 @@ class TipoDeEvidencia(StrEnum):
     CNPJ_CPF = "CNPJ/CPF"
     NOME_POR_PREFIXO = "nome por prefixo"
     SO_VALOR = "só valor"
+    PARECER_DE_LLM = "parecer de LLM"
+
+
+class Resposta(StrEnum):
+    SIM = "sim"
+    NAO = "não"
+    INDISPONIVEL = "IA indisponível"
+
+
+@dataclass(frozen=True)
+class Parecer:
+    resposta: Resposta
+    explicacao: str
+    modelo: str
+    versao_do_prompt: str
+
+
+@dataclass(frozen=True)
+class ParecerSobreFranqueado:
+    franqueado: str
+    parecer: Parecer
+
+    def descrever(self) -> str:
+        parecer = self.parecer
+        return (
+            f"Franqueado de raiz {self.franqueado}: {parecer.resposta.value}, {parecer.explicacao} "
+            f"(modelo {parecer.modelo}, prompt {parecer.versao_do_prompt})"
+        )
 
 
 @dataclass(frozen=True)
@@ -123,6 +151,7 @@ class Classificacao:
     explicacao: str
     motivo: MotivoDeNaoIdentificacao | None = None
     evidencia: tuple[TipoDeEvidencia, ...] = ()
+    pareceres: tuple[ParecerSobreFranqueado, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,10 +163,15 @@ class Item:
     explicacao: str
     motivo: MotivoDeNaoIdentificacao | None
     evidencia: tuple[TipoDeEvidencia, ...]
+    pareceres: tuple[ParecerSobreFranqueado, ...]
 
     @property
     def o_que_falta(self) -> str:
         return self.motivo.o_que_falta if self.motivo else ""
+
+    @property
+    def ia_indisponivel(self) -> bool:
+        return any(p.parecer.resposta is Resposta.INDISPONIVEL for p in self.pareceres)
 
 
 @dataclass(frozen=True)
@@ -167,6 +201,8 @@ class Resumo:
     arquivos_recusados: tuple[ArquivoRecusado, ...]
     lancamentos_novos: int
     totais: dict[Destino, TotalDoDestino]
+    itens_com_parecer: int
+    itens_ia_indisponivel: int
 
 
 @dataclass(frozen=True)

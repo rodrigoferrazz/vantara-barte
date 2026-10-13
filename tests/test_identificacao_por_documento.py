@@ -6,6 +6,7 @@ from conciliacao.armazenamento import Armazenamento
 from conciliacao.dominio import MotivoDeNaoIdentificacao
 from conciliacao.execucao import executar_conciliacao
 from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
+from tests.parecerista import PareceristaFalso
 
 CNPJ_MATRIZ = "10.200.300/0001-40"
 CNPJ_OUTRO_FRANQUEADO = "20.400.600/0001-80"
@@ -32,7 +33,7 @@ def test_cnpj_no_historico_com_valor_unico_vai_para_a_lista_citando_o_documento(
     )
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", historico, "740,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [item] = resultado.lista_de_baixa
     assert [t.documento for t in item.titulos] == ["NF 910001"]
@@ -54,7 +55,7 @@ def test_valor_unico_considera_so_os_titulos_do_franqueado_identificado(
     )
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "PIX RECEBIDO 10200300000140", "520,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [item] = resultado.lista_de_baixa
     assert [t.documento for t in item.titulos] == ["NF 910012"]
@@ -72,7 +73,7 @@ def test_valor_que_bate_com_mais_de_um_titulo_do_franqueado_vai_para_a_fila(
     )
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "PIX RECEBIDO 10200300000140", "300,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
@@ -87,7 +88,7 @@ def test_valor_que_nao_bate_com_titulo_do_franqueado_vai_para_a_fila_como_valor_
     escrever_protheus(pasta, [TituloProtheus(documento="NF 910031", valor="900,00", cnpj=CNPJ_MATRIZ)])
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "PIX RECEBIDO 10200300000140", "650,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
@@ -99,7 +100,7 @@ def test_cnpj_que_nao_e_de_franqueado_nao_identifica_o_pagador(pasta: Path, arma
     escrever_protheus(pasta, [TituloProtheus(documento="NF 910041", valor="410,00", cnpj=CNPJ_MATRIZ)])
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "PIX RECEBIDO 99888777000166", "410,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
@@ -110,11 +111,11 @@ def test_franqueado_identificado_sem_titulo_em_aberto_vai_para_a_fila_e_casa_com
     pasta: Path, armazenamento: Armazenamento
 ) -> None:
     escrever_protheus(pasta, [TituloProtheus(documento="NF 910051", valor="200,00", cnpj=CNPJ_MATRIZ)])
-    executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     escrever_protheus(pasta, [TituloProtheus(documento="NF 910061", valor="80,00", cnpj=CNPJ_OUTRO_FRANQUEADO)])
     escrever_extrato_itau(pasta, [LinhaItau("12/03/2025", "PIX RECEBIDO 10200300000140", "1.250,00")])
-    antecipado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    antecipado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     [item] = antecipado.fila_de_excecoes
     assert item.motivo is MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO
@@ -122,7 +123,7 @@ def test_franqueado_identificado_sem_titulo_em_aberto_vai_para_a_fila_e_casa_com
     assert "10200300000140" in item.explicacao
 
     escrever_protheus(pasta, [TituloProtheus(documento="NF 910071", valor="1.250,00", cnpj=CNPJ_MATRIZ)])
-    retentado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    retentado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert retentado.fila_de_excecoes == []
     [baixa] = retentado.lista_de_baixa
@@ -142,7 +143,7 @@ def test_cnpjs_de_franqueados_diferentes_no_mesmo_historico_nao_identificam_o_pa
     )
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "TED 10200300000140 REF 20400600000180", "610,00")])
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau())
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
 
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
