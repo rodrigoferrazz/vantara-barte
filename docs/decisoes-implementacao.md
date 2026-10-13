@@ -103,3 +103,27 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** com Títulos em aberto e nenhum de mesmo valor, o Crédito vai para a Fila como "valor não fecha", sugerindo o Título só quando o Franqueado tem um único Título em aberto. Com mais de um Título de mesmo valor, vai como "mais de uma combinação possível", sem sugestão, citando os Títulos na explicação.
 - **Por quê:** a precedência da spec põe "valor não fecha" antes de "Crédito sem título em aberto"; sugerir o único Título repete o tratamento do nosso número com valor diferente (ticket 01); com vários Títulos a plataforma não escolhe. Valor único também abrange combinação, por isso o Motivo de combinação. Encargo (ticket 04) e somas (ticket 07) refinam esses casos.
 - **Alternativas:** tratar como "Crédito sem título em aberto"; sugerir todos os Títulos de mesmo valor.
+
+## Ticket 04: feriados bancários nacionais
+
+- **Decisão:** são dias não úteis sábado, domingo, os feriados nacionais fixos (1/1, 21/4, 1/5, 7/9, 12/10, 2/11, 15/11, 25/12, e 20/11 a partir de 2024), segunda e terça de Carnaval, Sexta-feira da Paixão e Corpus Christi, calculados a partir da Páscoa. Quarta-feira de Cinzas, 24/12 e 31/12 contam como dias úteis.
+- **Por quê:** é o calendário de feriados bancários nacionais da FEBRABAN; nas datas que ficaram de fora há expediente ou compensação. Calcular pela Páscoa evita uma tabela que precisa ser atualizada todo ano.
+- **Alternativas:** tabela de feriados em configuração (manutenção anual); tratar Cinzas, 24/12 e 31/12 como não úteis.
+
+## Ticket 04: cálculo do Encargo previsto
+
+- **Decisão:** atraso é a diferença em dias corridos entre a data do Crédito no Extrato e o Vencimento efetivo. Com atraso, Encargo previsto = multa sobre o valor do Título + juros ao mês pro rata (dias de atraso / 30), cada parcela arredondada ao centavo (meio para cima). Padrões: multa 2%, juros 1% ao mês, tolerância R$ 0,00, em `[encargo]` do `conciliacao.toml` (`multa_percentual`, `juros_ao_mes_percentual`, `tolerancia_reais`); campo desconhecido, negativo, não numérico ou tolerância com fração de centavo recusam a configuração.
+- **Por quê:** a spec só fixa a multa de 2%; juros de 1% ao mês é o usual em contrato e a tolerância zero só manda para a Lista o que a regra explica. A data do Crédito é a única data de pagamento que o Extrato traz.
+- **Alternativas:** juros de 0% (todo pagamento com juros iria para a Fila); juros compostos ou por dias úteis; contar o atraso do vencimento original.
+
+## Ticket 04: faixa que fecha com o Título
+
+- **Decisão:** o Crédito fecha com o Título quando é igual ao valor do Título (em dia, ou com Encargo não pago se atrasado) ou, se atrasado, quando fica acima do Título e no máximo no Título + Encargo previsto + tolerância; qualquer valor nessa faixa conta como Encargo pago, inclusive só a multa. A tolerância só vale com atraso: sem atraso, qualquer valor acima é Valor a maior. Abaixo do Título é Diferença a menor. Os dois casos vão para a Fila como "valor não fecha", com a explicação dizendo qual. Principal e Encargo aparecem só na explicação.
+- **Por quê:** Valor a maior é definido sobre o Encargo previsto, que é zero sem atraso; pagar parte do Encargo (ex.: só a multa) não é motivo para investigar. A spec pede principal e Encargo na explicação, sem coluna própria.
+- **Alternativas:** exigir o Encargo exato; aplicar a tolerância também a pagamentos em dia; colunas de principal e Encargo no workbook.
+
+## Ticket 04: Encargo na identificação por CNPJ
+
+- **Decisão:** na identificação por CNPJ, Valor único passa a ser "um só Título em aberto do Franqueado com que o valor fecha, considerando o Encargo". Se fecha com mais de um (ex.: exato num e dentro do Encargo de outro), vai para a Fila como "mais de uma combinação possível". Se não fecha com nenhum, segue "valor não fecha", sugerindo o Título quando é o único e explicando se é Diferença a menor ou Valor a maior.
+- **Por quê:** a spec põe "CNPJ + Valor único; Encargo não pago" e "CNPJ; 22.900 + 458 de multa" na Lista; preferir o valor exato seria escolher entre opções válidas.
+- **Alternativas:** Encargo só no nosso número; preferir o Título de valor exato.

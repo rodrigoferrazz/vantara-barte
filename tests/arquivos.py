@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
+from conciliacao.encargo import ParametrosDeEncargo
 
 CABECALHO_PROTHEUS = "cliente;cnpj;unidade;documento;nosso_numero;tipo;emissao;vencimento;valor;status"
 CABECALHO_ITAU = "data;historico;documento;valor;tipo"
@@ -57,5 +58,7 @@ def escrever_extrato_itau(pasta: Path, linhas: list[LinhaItau], nome: str = "ita
     return caminho
 
 
-def configuracao_itau(padrao: str = "itau_cobranca*.csv", conta: str = "1234-5") -> Configuracao:
-    return Configuracao(contas=(ContaDeExtrato(padrao=padrao, banco="itau", conta=conta),))
+def configuracao_itau(
+    padrao: str = "itau_cobranca*.csv", conta: str = "1234-5", encargo: ParametrosDeEncargo = ParametrosDeEncargo()
+) -> Configuracao:
+    return Configuracao(contas=(ContaDeExtrato(padrao=padrao, banco="itau", conta=conta),), encargo=encargo)

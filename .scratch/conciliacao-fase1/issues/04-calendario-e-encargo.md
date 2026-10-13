@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] Vencimento em sábado, domingo ou feriado bancário nacional é prorrogado para o próximo dia útil
-- [ ] Pagamento até o Vencimento efetivo não tem Encargo
-- [ ] Pagamento atrasado dentro de multa + juros + tolerância vai para a Lista com principal e Encargo na explicação
-- [ ] Pagamento atrasado só com o valor original vai para a Lista com a nota de Encargo não pago
-- [ ] Valor abaixo do Título vai para a Fila como 'valor não fecha'; valor acima do Título + Encargo também
-- [ ] Parâmetros de Encargo alteráveis por configuração sem mudar código
+- [x] Vencimento em sábado, domingo ou feriado bancário nacional é prorrogado para o próximo dia útil
+- [x] Pagamento até o Vencimento efetivo não tem Encargo
+- [x] Pagamento atrasado dentro de multa + juros + tolerância vai para a Lista com principal e Encargo na explicação
+- [x] Pagamento atrasado só com o valor original vai para a Lista com a nota de Encargo não pago
+- [x] Valor abaixo do Título vai para a Fila como 'valor não fecha'; valor acima do Título + Encargo também
+- [x] Parâmetros de Encargo alteráveis por configuração sem mudar código
 
 Spec: `.scratch/conciliacao-fase1/spec.md`
