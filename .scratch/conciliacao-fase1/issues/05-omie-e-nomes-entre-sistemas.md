@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] Exportação Omie (vírgula, ponto decimal, data ISO, CNPJ sem pontuação) é lida como vem
-- [ ] Crédito identificado por CNPJ casa com Título do Omie do mesmo jeito que com Título do Protheus
-- [ ] Valor único considera os Títulos em aberto do Franqueado em todos os Sistemas de origem
-- [ ] Mesmo Franqueado, valor e vencimento em Protheus e Omie gera item de Possível duplicidade na Fila
-- [ ] O item de duplicidade não interfere na conferência de soma dos Créditos
+- [x] Exportação Omie (vírgula, ponto decimal, data ISO, CNPJ sem pontuação) é lida como vem
+- [x] Crédito identificado por CNPJ casa com Título do Omie do mesmo jeito que com Título do Protheus
+- [x] Valor único considera os Títulos em aberto do Franqueado em todos os Sistemas de origem
+- [x] Mesmo Franqueado, valor e vencimento em Protheus e Omie gera item de Possível duplicidade na Fila
+- [x] O item de duplicidade não interfere na conferência de soma dos Créditos
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

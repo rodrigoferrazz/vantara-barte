@@ -7,7 +7,15 @@ from typing import Protocol
 
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
 from conciliacao.dominio import ArquivoRecusado, ChaveNatural, Lancamento, Natureza, Titulo
-from conciliacao.normalizacao import FormatoInvalido, centavos_de_valor_ptbr, cnpj, data_ptbr
+from conciliacao.normalizacao import (
+    FormatoInvalido,
+    centavos_de_valor_com_ponto,
+    centavos_de_valor_ptbr,
+    cnpj,
+    cnpj_sem_pontuacao,
+    data_iso,
+    data_ptbr,
+)
 
 
 class Recusa(Exception):
@@ -61,6 +69,31 @@ class ProtheusContasAReceber:
         return ConteudoDoArquivo(titulos=titulos)
 
 
+class OmieTitulos:
+    nome = "exportação Omie"
+    cabecalho: tuple[str, ...] = ("customer_name", "tax_id", "invoice_ref", "due_date", "amount", "paid_flag")
+    separador = ","
+
+    def ler(self, arquivo: Path, linhas: list[list[str]], configuracao: Configuracao) -> ConteudoDoArquivo:
+        titulos = []
+        for numero, linha in enumerate(linhas, start=2):
+            campos = dict(zip(self.cabecalho, linha))
+            if campos["paid_flag"] != "N":
+                raise Recusa(f"linha {numero}: paid_flag '{campos['paid_flag']}' desconhecido; só 'N' é aceito")
+            titulos.append(
+                Titulo(
+                    sistema_de_origem="Omie",
+                    documento=campos["invoice_ref"],
+                    cliente=campos["customer_name"],
+                    cnpj=_formato(numero, cnpj_sem_pontuacao, campos["tax_id"]),
+                    nosso_numero=None,
+                    vencimento=_formato(numero, data_iso, campos["due_date"]),
+                    valor_centavos=_formato(numero, centavos_de_valor_com_ponto, campos["amount"]),
+                )
+            )
+        return ConteudoDoArquivo(titulos=titulos)
+
+
 class ExtratoItau:
     nome = "Extrato Itaú"
     banco = "itau"
@@ -95,7 +128,7 @@ class ExtratoItau:
 
 
 EXTRATOS: tuple[ExtratoItau, ...] = (ExtratoItau(),)
-ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), *EXTRATOS)
+ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), OmieTitulos(), *EXTRATOS)
 
 
 def ler_pasta(pasta: Path, configuracao: Configuracao) -> Leitura:

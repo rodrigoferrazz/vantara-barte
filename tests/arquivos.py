@@ -6,6 +6,7 @@ from conciliacao.encargo import ParametrosDeEncargo
 
 CABECALHO_PROTHEUS = "cliente;cnpj;unidade;documento;nosso_numero;tipo;emissao;vencimento;valor;status"
 CABECALHO_ITAU = "data;historico;documento;valor;tipo"
+CABECALHO_OMIE = "customer_name,tax_id,invoice_ref,due_date,amount,paid_flag"
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,19 @@ class TituloProtheus:
 
 
 @dataclass(frozen=True)
+class TituloOmie:
+    documento: str
+    valor: str
+    cliente: str = "FRANQUIA TESTE NORTE LTDA"
+    cnpj: str = "10200300000140"
+    vencimento: str = "2025-03-05"
+    pago: str = "N"
+
+    def linha(self) -> str:
+        return ",".join([self.cliente, self.cnpj, self.documento, self.vencimento, self.valor, self.pago])
+
+
+@dataclass(frozen=True)
 class LinhaItau:
     data: str
     historico: str
@@ -49,6 +63,12 @@ class LinhaItau:
 def escrever_protheus(pasta: Path, titulos: list[TituloProtheus], nome: str = "receber_protheus.csv") -> Path:
     caminho = pasta / nome
     caminho.write_text("\n".join([CABECALHO_PROTHEUS, *(t.linha() for t in titulos)]) + "\n", encoding="utf-8")
+    return caminho
+
+
+def escrever_omie(pasta: Path, titulos: list[TituloOmie], nome: str = "titulos_omie.csv") -> Path:
+    caminho = pasta / nome
+    caminho.write_text("\n".join([CABECALHO_OMIE, *(t.linha() for t in titulos)]) + "\n", encoding="utf-8")
     return caminho
 
 

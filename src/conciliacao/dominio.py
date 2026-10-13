@@ -42,6 +42,22 @@ class Titulo:
         return raiz_do_cnpj(self.cnpj)
 
 
+@dataclass(frozen=True)
+class Franqueado:
+    raiz: str
+    nomes: dict[str, frozenset[str]]
+
+    @property
+    def todos_os_nomes(self) -> frozenset[str]:
+        return frozenset().union(*self.nomes.values())
+
+
+@dataclass(frozen=True)
+class PossivelDuplicidade:
+    titulos: tuple[Titulo, ...]
+    explicacao: str
+
+
 type ChaveNatural = tuple[str, str, date, Natureza, int, str, str, int]
 
 
@@ -90,6 +106,14 @@ class Item:
 
 
 @dataclass(frozen=True)
+class ItemDeTitulo:
+    identificador: str
+    titulos: tuple[Titulo, ...]
+    explicacao: str
+    motivo: MotivoDeNaoIdentificacao
+
+
+@dataclass(frozen=True)
 class ArquivoRecusado:
     nome: str
     motivo: str
@@ -114,6 +138,7 @@ class Resumo:
 class Resultado:
     resumo: Resumo
     itens: tuple[Item, ...]
+    itens_de_titulo: tuple[ItemDeTitulo, ...]
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]

@@ -127,3 +127,27 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** na identificação por CNPJ, Valor único passa a ser "um só Título em aberto do Franqueado com que o valor fecha, considerando o Encargo". Se fecha com mais de um (ex.: exato num e dentro do Encargo de outro), vai para a Fila como "mais de uma combinação possível". Se não fecha com nenhum, segue "valor não fecha", sugerindo o Título quando é o único e explicando se é Diferença a menor ou Valor a maior.
 - **Por quê:** a spec põe "CNPJ + Valor único; Encargo não pago" e "CNPJ; 22.900 + 458 de multa" na Lista; preferir o valor exato seria escolher entre opções válidas.
 - **Alternativas:** Encargo só no nosso número; preferir o Título de valor exato.
+
+## Ticket 05: layout exato da exportação Omie
+
+- **Decisão:** o adaptador do Omie aceita só o cabeçalho `customer_name,tax_id,invoice_ref,due_date,amount,paid_flag` com vírgula, valor com ponto e exatamente duas casas sem separador de milhar (`1234.56`), data `aaaa-mm-dd` e CNPJ com 14 dígitos sem pontuação. `paid_flag` diferente de "N" recusa o arquivo com o motivo. Título do Omie não tem nosso número.
+- **Por quê:** é o formato da exportação como vem; cada adaptador declara o layout exato (spec) e o resto é recusado (ADR 0005). O tratamento de `paid_flag` repete o do status do Protheus (ticket 01).
+- **Alternativas:** aceitar também CNPJ pontuado ou valor sem centavos; ignorar linhas com `paid_flag` "S".
+
+## Ticket 05: nomes do Franqueado
+
+- **Decisão:** os nomes do Franqueado por Sistema de origem vêm das fotografias de Títulos já guardadas, de todas as execuções (`Armazenamento.franqueados()`), sem tabela própria. Os nomes são guardados como vêm; a normalização para a comparação de prefixo fica para o ticket 06. Um nome que deixou de aparecer na exportação continua sendo do Franqueado.
+- **Por quê:** a fotografia de Títulos já registra raiz, sistema e nome; uma tabela à parte duplicaria o dado. Manter nomes antigos segue a decisão do ticket 03 de lembrar Franqueados de execuções anteriores.
+- **Alternativas:** tabela `franqueados`/`nomes` atualizada a cada execução; considerar só os nomes da exportação atual.
+
+## Ticket 05: Possível duplicidade entre sistemas
+
+- **Decisão:** Títulos em aberto da execução são agrupados por raiz do CNPJ + vencimento (o original, não o efetivo) + valor; o grupo vira um item de Título quando tem Títulos de mais de um Sistema de origem, com todos os Títulos do grupo. O item recebe o identificador estável `D<n>`, ligado ao conjunto de (Sistema de origem, documento) dos Títulos, e fica em `Resultado.itens_de_titulo`, fora de `fila_de_excecoes` (que segue só com Créditos). A duplicidade não muda a classificação dos Créditos: um Crédito que fecha com os dois Títulos vai para a Fila como "mais de uma combinação possível", a não ser que o nosso número aponte um só.
+- **Por quê:** a definição do CONTEXT fala de valor e vencimento como estão no Título; a spec conta Créditos e itens de Título separadamente ("Fila com 9 Créditos" e "1 item de Título") e a conferência de soma é só sobre lançamentos do Extrato. Identificador estável é necessário para a decisão da Analista pelo Excel (ticket 13).
+- **Alternativas:** comparar pelo Vencimento efetivo; marcar duplicidade também dentro do mesmo sistema; excluir os Títulos duplicados do casamento com Créditos (seria decidir pela Analista).
+
+## Ticket 05: item de Título no workbook
+
+- **Decisão:** os itens de Título aparecem na aba Fila de exceções depois dos Créditos, com Item, Motivo, Títulos sugeridos e Explicação preenchidos e as colunas do lançamento (inclusive Valor) vazias; valor e vencimento ficam na explicação. O Resumo ganha a linha "Itens de Título na Fila" e as linhas por destino continuam contando só lançamentos.
+- **Por quê:** a spec põe a Possível duplicidade na Fila; deixar Valor vazio faz a soma da coluna na aba continuar igual à soma dos Créditos da Fila.
+- **Alternativas:** aba própria para itens de Título; preencher Valor com o valor do Título.

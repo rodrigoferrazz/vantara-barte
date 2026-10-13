@@ -1,8 +1,17 @@
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 
-from conciliacao.dominio import Classificacao, Destino, Lancamento, MotivoDeNaoIdentificacao, Natureza, Titulo
+from conciliacao.dominio import (
+    Classificacao,
+    Destino,
+    Lancamento,
+    MotivoDeNaoIdentificacao,
+    Natureza,
+    PossivelDuplicidade,
+    Titulo,
+)
 from conciliacao.encargo import ParametrosDeEncargo, enquadrar
 from conciliacao.normalizacao import cnpjs_no_texto, formatar_reais, raiz_do_cnpj
 
@@ -31,6 +40,29 @@ def conciliar(
         por_nosso_numero, por_franqueado, frozenset(franqueados_conhecidos) | por_franqueado.keys(), encargo
     )
     return [_classificar(lancamento, abertos) for lancamento in lancamentos]
+
+
+def possiveis_duplicidades(titulos: Iterable[Titulo]) -> list[PossivelDuplicidade]:
+    grupos: dict[tuple[str, date, int], list[Titulo]] = defaultdict(list)
+    for titulo in titulos:
+        grupos[(titulo.franqueado, titulo.vencimento, titulo.valor_centavos)].append(titulo)
+    return [
+        _possivel_duplicidade(franqueado, vencimento, valor, grupo)
+        for (franqueado, vencimento, valor), grupo in sorted(grupos.items())
+        if len({titulo.sistema_de_origem for titulo in grupo}) > 1
+    ]
+
+
+def _possivel_duplicidade(franqueado: str, vencimento: date, valor: int, grupo: list[Titulo]) -> PossivelDuplicidade:
+    titulos = sorted(grupo, key=lambda titulo: (titulo.sistema_de_origem, titulo.documento))
+    return PossivelDuplicidade(
+        titulos=tuple(titulos),
+        explicacao=(
+            f"Títulos do Franqueado de raiz {franqueado} com o mesmo valor {formatar_reais(valor)} e vencimento "
+            f"{vencimento:%d/%m/%Y} em Sistemas de origem diferentes: {_documentos(titulos)}. "
+            "Podem ser a mesma dívida."
+        ),
+    )
 
 
 def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:

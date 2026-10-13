@@ -5,7 +5,7 @@ from conciliacao.armazenamento import Armazenamento
 from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
 from conciliacao.dominio import Lancamento, Natureza, Resultado
-from conciliacao.motor import conciliar
+from conciliacao.motor import conciliar, possiveis_duplicidades
 
 
 def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao: Configuracao) -> Resultado:
@@ -18,7 +18,7 @@ def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_guardados())
         classificacoes = conciliar(
-            leitura.titulos, lancamentos.values(), armazenamento.franqueados_conhecidos(), configuracao.encargo
+            leitura.titulos, lancamentos.values(), armazenamento.franqueados().keys(), configuracao.encargo
         )
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
@@ -28,5 +28,6 @@ def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao
             arquivos_recusados=leitura.arquivos_recusados,
             titulos=leitura.titulos,
             classificacoes=[(id_por_chave[c.lancamento.chave_natural], c) for c in classificacoes],
+            duplicidades=possiveis_duplicidades(leitura.titulos),
         )
     return armazenamento.carregar_resultado(execucao)

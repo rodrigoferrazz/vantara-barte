@@ -4,7 +4,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from conciliacao.dominio import ArquivoRecusado, Destino, Item, Resultado, Titulo
+from conciliacao.dominio import ArquivoRecusado, Destino, Item, ItemDeTitulo, Resultado, Titulo
 from conciliacao.normalizacao import formatar_reais
 
 _FORMATO_DE_VALOR = "#,##0.00"
@@ -18,11 +18,9 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     resumo.title = "Resumo"
     _preencher_resumo(resumo, resultado)
     _aba_de_itens(workbook.create_sheet(Destino.LISTA_DE_BAIXA.value), resultado.lista_de_baixa, ("Títulos", "Explicação"))
-    _aba_de_itens(
-        workbook.create_sheet(Destino.FILA_DE_EXCECOES.value),
-        resultado.fila_de_excecoes,
-        ("Motivo", "Títulos sugeridos", "Explicação"),
-    )
+    fila = workbook.create_sheet(Destino.FILA_DE_EXCECOES.value)
+    _aba_de_itens(fila, resultado.fila_de_excecoes, ("Motivo", "Títulos sugeridos", "Explicação"))
+    _acrescentar_itens_de_titulo(fila, resultado.itens_de_titulo)
     _aba_de_itens(workbook.create_sheet(Destino.FORA_DO_ESCOPO.value), resultado.fora_do_escopo, ("Explicação",))
     _aba_de_arquivos_recusados(workbook.create_sheet("Arquivos recusados"), resultado.arquivos_recusados)
     workbook.save(caminho)
@@ -40,6 +38,7 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
     aba.append(("Lançamentos novos no Extrato", resumo.lancamentos_novos))
     for destino, total in resumo.totais.items():
         aba.append((destino.value, f"{total.quantidade} lançamento(s), {formatar_reais(total.valor_centavos)}"))
+    aba.append(("Itens de Título na Fila", len(resultado.itens_de_titulo)))
     aba.column_dimensions["A"].width = 32
     aba.column_dimensions["B"].width = 60
 
@@ -69,6 +68,12 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
         aba.cell(row=aba.max_row, column=4).number_format = _FORMATO_DE_DATA
         aba.cell(row=aba.max_row, column=7).number_format = _FORMATO_DE_VALOR
     aba.freeze_panes = "A2"
+
+
+def _acrescentar_itens_de_titulo(aba: Worksheet, itens: tuple[ItemDeTitulo, ...]) -> None:
+    for item in itens:
+        sem_lancamento = (None,) * 6
+        aba.append((item.identificador, *sem_lancamento, item.motivo.value, _titulos(item.titulos), item.explicacao))
 
 
 def _aba_de_arquivos_recusados(aba: Worksheet, recusados: tuple[ArquivoRecusado, ...]) -> None:

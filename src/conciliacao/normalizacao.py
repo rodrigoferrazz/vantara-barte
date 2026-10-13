@@ -2,7 +2,10 @@ import re
 from datetime import date, datetime
 
 _VALOR_PTBR = re.compile(r"\d{1,3}(\.\d{3})*,\d{2}")
+_VALOR_COM_PONTO = re.compile(r"\d+\.\d{2}")
 _DATA_PTBR = re.compile(r"\d{2}/\d{2}/\d{4}")
+_DATA_ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
+_CNPJ_SEM_PONTUACAO = re.compile(r"\d{14}")
 _CNPJ = r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14}"
 _CNPJ_INTEIRO = re.compile(_CNPJ)
 _CNPJ_NO_TEXTO = re.compile(rf"(?<![\d./-])(?:{_CNPJ})(?![\d./-]*\d)")
@@ -18,11 +21,27 @@ def centavos_de_valor_ptbr(texto: str) -> int:
     return int(texto.replace(".", "").replace(",", ""))
 
 
+def centavos_de_valor_com_ponto(texto: str) -> int:
+    if not _VALOR_COM_PONTO.fullmatch(texto):
+        raise FormatoInvalido(f"valor '{texto}' não está no formato 1234.56")
+    return int(texto.replace(".", ""))
+
+
 def data_ptbr(texto: str) -> date:
     if not _DATA_PTBR.fullmatch(texto):
         raise FormatoInvalido(f"data '{texto}' não está no formato dd/mm/aaaa")
+    return _data(texto, "%d/%m/%Y")
+
+
+def data_iso(texto: str) -> date:
+    if not _DATA_ISO.fullmatch(texto):
+        raise FormatoInvalido(f"data '{texto}' não está no formato aaaa-mm-dd")
+    return _data(texto, "%Y-%m-%d")
+
+
+def _data(texto: str, formato: str) -> date:
     try:
-        return datetime.strptime(texto, "%d/%m/%Y").date()
+        return datetime.strptime(texto, formato).date()
     except ValueError as erro:
         raise FormatoInvalido(f"data '{texto}' não existe") from erro
 
@@ -36,6 +55,12 @@ def cnpj(texto: str) -> str:
     if not _CNPJ_INTEIRO.fullmatch(texto):
         raise FormatoInvalido(f"CNPJ '{texto}' não está no formato 12.345.678/0001-90 nem tem 14 dígitos")
     return _so_digitos(texto)
+
+
+def cnpj_sem_pontuacao(texto: str) -> str:
+    if not _CNPJ_SEM_PONTUACAO.fullmatch(texto):
+        raise FormatoInvalido(f"CNPJ '{texto}' não tem 14 dígitos sem pontuação")
+    return texto
 
 
 def cnpjs_no_texto(texto: str) -> list[str]:

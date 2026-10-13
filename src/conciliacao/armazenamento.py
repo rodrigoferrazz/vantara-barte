@@ -1,4 +1,5 @@
 import sqlite3
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -9,10 +10,13 @@ from conciliacao.dominio import (
     ChaveNatural,
     Classificacao,
     Destino,
+    Franqueado,
     Item,
+    ItemDeTitulo,
     Lancamento,
     MotivoDeNaoIdentificacao,
     Natureza,
+    PossivelDuplicidade,
     Resultado,
     Resumo,
     Titulo,
@@ -64,6 +68,21 @@ CREATE TABLE IF NOT EXISTS itens (
 );
 CREATE TABLE IF NOT EXISTS itens_titulos (
     item_id INTEGER NOT NULL REFERENCES itens(id),
+    titulo_id INTEGER NOT NULL REFERENCES titulos(id)
+);
+CREATE TABLE IF NOT EXISTS duplicidades (
+    id INTEGER PRIMARY KEY,
+    chave TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS itens_de_titulo (
+    id INTEGER PRIMARY KEY,
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    duplicidade_id INTEGER NOT NULL REFERENCES duplicidades(id),
+    explicacao TEXT NOT NULL,
+    motivo TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS itens_de_titulo_titulos (
+    item_id INTEGER NOT NULL REFERENCES itens_de_titulo(id),
     titulo_id INTEGER NOT NULL REFERENCES titulos(id)
 );
 """
@@ -119,9 +138,15 @@ class Armazenamento:
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
 
-    def franqueados_conhecidos(self) -> frozenset[str]:
-        linhas = self._conexao.execute("SELECT DISTINCT cnpj FROM titulos")
-        return frozenset(raiz_do_cnpj(cnpj) for (cnpj,) in linhas)
+    def franqueados(self) -> dict[str, Franqueado]:
+        nomes: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+        linhas = self._conexao.execute("SELECT DISTINCT cnpj, sistema_de_origem, cliente FROM titulos")
+        for cnpj, sistema, cliente in linhas:
+            nomes[raiz_do_cnpj(cnpj)][sistema].add(cliente)
+        return {
+            raiz: Franqueado(raiz=raiz, nomes={sistema: frozenset(n) for sistema, n in por_sistema.items()})
+            for raiz, por_sistema in nomes.items()
+        }
 
     def registrar_execucao(
         self,
@@ -130,6 +155,7 @@ class Armazenamento:
         arquivos_recusados: Iterable[ArquivoRecusado],
         titulos: Iterable[Titulo],
         classificacoes: Iterable[tuple[int, Classificacao]],
+        duplicidades: Iterable[PossivelDuplicidade],
     ) -> int:
         cursor = self._conexao.execute(
             "INSERT INTO execucoes (momento, lancamentos_novos) VALUES (?, ?)",
@@ -158,7 +184,24 @@ class Armazenamento:
                 "INSERT INTO itens_titulos (item_id, titulo_id) VALUES (?, ?)",
                 [(item, id_do_titulo[titulo]) for titulo in classificacao.titulos],
             )
+        for duplicidade in duplicidades:
+            self._registrar_duplicidade(execucao, duplicidade, id_do_titulo)
         return execucao
+
+    def _registrar_duplicidade(
+        self, execucao: int, duplicidade: PossivelDuplicidade, id_do_titulo: dict[Titulo, int]
+    ) -> None:
+        chave = "|".join(sorted(f"{t.sistema_de_origem}:{t.documento}" for t in duplicidade.titulos))
+        self._conexao.execute("INSERT OR IGNORE INTO duplicidades (chave) VALUES (?)", (chave,))
+        (duplicidade_id,) = self._conexao.execute("SELECT id FROM duplicidades WHERE chave = ?", (chave,)).fetchone()
+        item = self._conexao.execute(
+            "INSERT INTO itens_de_titulo (execucao_id, duplicidade_id, explicacao, motivo) VALUES (?, ?, ?, ?)",
+            (execucao, duplicidade_id, duplicidade.explicacao, MotivoDeNaoIdentificacao.POSSIVEL_DUPLICIDADE.value),
+        ).lastrowid
+        self._conexao.executemany(
+            "INSERT INTO itens_de_titulo_titulos (item_id, titulo_id) VALUES (?, ?)",
+            [(item, id_do_titulo[titulo]) for titulo in duplicidade.titulos],
+        )
 
     def _guardar_titulo(self, execucao: int, titulo: Titulo) -> int:
         cursor = self._conexao.execute(
@@ -200,7 +243,20 @@ class Armazenamento:
             lancamentos_novos=lancamentos_novos,
             totais=totais,
         )
-        return Resultado(resumo=resumo, itens=itens)
+        return Resultado(resumo=resumo, itens=itens, itens_de_titulo=tuple(self._itens_de_titulo(execucao)))
+
+    def _itens_de_titulo(self, execucao: int) -> Iterator[ItemDeTitulo]:
+        linhas = self._conexao.execute(
+            "SELECT id, duplicidade_id, explicacao, motivo FROM itens_de_titulo WHERE execucao_id = ? ORDER BY id",
+            (execucao,),
+        ).fetchall()
+        for item_id, duplicidade_id, explicacao, motivo in linhas:
+            yield ItemDeTitulo(
+                identificador=f"D{duplicidade_id}",
+                titulos=self._titulos_ligados("itens_de_titulo_titulos", item_id),
+                explicacao=explicacao,
+                motivo=MotivoDeNaoIdentificacao(motivo),
+            )
 
     def _itens(self, execucao: int) -> Iterator[Item]:
         linhas = self._conexao.execute(
@@ -214,15 +270,15 @@ class Armazenamento:
                 identificador=f"L{lancamento_id}",
                 destino=Destino(destino),
                 lancamento=_lancamento(lancamento),
-                titulos=self._titulos_do_item(item_id),
+                titulos=self._titulos_ligados("itens_titulos", item_id),
                 explicacao=explicacao,
                 motivo=MotivoDeNaoIdentificacao(motivo) if motivo else None,
             )
 
-    def _titulos_do_item(self, item_id: int) -> tuple[Titulo, ...]:
+    def _titulos_ligados(self, ligacao: str, item_id: int) -> tuple[Titulo, ...]:
         linhas = self._conexao.execute(
             "SELECT t.sistema_de_origem, t.documento, t.cliente, t.cnpj, t.nosso_numero, t.vencimento,"
-            " t.valor_centavos FROM itens_titulos it JOIN titulos t ON t.id = it.titulo_id"
+            f" t.valor_centavos FROM {ligacao} it JOIN titulos t ON t.id = it.titulo_id"
             " WHERE it.item_id = ? ORDER BY t.id",
             (item_id,),
         )
