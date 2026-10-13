@@ -152,6 +152,11 @@ class Classificacao:
     motivo: MotivoDeNaoIdentificacao | None = None
     evidencia: tuple[TipoDeEvidencia, ...] = ()
     pareceres: tuple[ParecerSobreFranqueado, ...] = ()
+    citados: tuple[Titulo, ...] = ()
+
+    @property
+    def titulos_candidatos(self) -> tuple[Titulo, ...]:
+        return tuple(dict.fromkeys((*self.titulos, *self.citados)))
 
 
 @dataclass(frozen=True)
@@ -195,6 +200,43 @@ class TotalDoDestino:
 
 
 @dataclass(frozen=True)
+class UltimaDataDaConta:
+    banco: str
+    conta: str
+    ultima_data: date | None
+
+
+@dataclass(frozen=True)
+class DataDeReferencia:
+    contas: tuple[UltimaDataDaConta, ...]
+
+    @property
+    def data(self) -> date | None:
+        datas = [conta.ultima_data for conta in self.contas]
+        if not datas or None in datas:
+            return None
+        return min(d for d in datas if d is not None)
+
+    @property
+    def contas_que_seguram(self) -> tuple[UltimaDataDaConta, ...]:
+        sem_extrato = tuple(conta for conta in self.contas if conta.ultima_data is None)
+        if sem_extrato:
+            return sem_extrato
+        return tuple(conta for conta in self.contas if conta.ultima_data == self.data)
+
+
+@dataclass(frozen=True)
+class TituloNaCobranca:
+    titulo: Titulo
+    saldo_centavos: int
+    creditos_candidatos: tuple[Lancamento, ...]
+
+    @property
+    def em_analise(self) -> bool:
+        return bool(self.creditos_candidatos)
+
+
+@dataclass(frozen=True)
 class Resumo:
     execucao: int
     arquivos_lidos: tuple[str, ...]
@@ -203,6 +245,7 @@ class Resumo:
     totais: dict[Destino, TotalDoDestino]
     itens_com_parecer: int
     itens_ia_indisponivel: int
+    data_de_referencia: DataDeReferencia
 
 
 @dataclass(frozen=True)
@@ -210,6 +253,7 @@ class Resultado:
     resumo: Resumo
     itens: tuple[Item, ...]
     itens_de_titulo: tuple[ItemDeTitulo, ...]
+    cobranca: tuple[TituloNaCobranca, ...]
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]
@@ -225,6 +269,17 @@ class Resultado:
     @property
     def fora_do_escopo(self) -> list[Item]:
         return self._do_destino(Destino.FORA_DO_ESCOPO)
+
+    @property
+    def lista_de_cobranca(self) -> tuple[TituloNaCobranca, ...]:
+        return tuple(titulo for titulo in self.cobranca if not titulo.em_analise)
+
+    @property
+    def em_analise(self) -> tuple[TituloNaCobranca, ...]:
+        return tuple(titulo for titulo in self.cobranca if titulo.em_analise)
+
+    def item_do_lancamento(self, lancamento: Lancamento) -> Item:
+        return next(item for item in self.itens if item.lancamento.chave_natural == lancamento.chave_natural)
 
     @property
     def arquivos_recusados(self) -> tuple[ArquivoRecusado, ...]:

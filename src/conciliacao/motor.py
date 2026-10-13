@@ -15,12 +15,16 @@ from conciliacao.dominio import (
     Resposta,
     TipoDeEvidencia,
     Titulo,
+    TituloNaCobranca,
 )
+from conciliacao.calendario import somar_dias_uteis, vencimento_efetivo
 from conciliacao.encargo import Pagamento, ParametrosDeEncargo, enquadrar
 from conciliacao.normalizacao import cnpjs_no_texto, formatar_reais, nome_normalizado, raiz_do_cnpj
 from conciliacao.parecerista import PareceristaDeNome
 
 type NomeDoPagador = Callable[[Lancamento], str | None]
+
+_DIAS_UTEIS_DE_COMPENSACAO_DO_BOLETO = 2
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,10 @@ class _Busca:
     @property
     def unica(self) -> _Opcao | None:
         return self.opcoes[0] if len(self.opcoes) == 1 and not self.limite_atingido else None
+
+    @property
+    def titulos(self) -> tuple[Titulo, ...]:
+        return tuple(dict.fromkeys(titulo for opcao in self.opcoes for titulo, _ in opcao.titulos))
 
     def descrever_ambiguidade(self) -> str:
         opcoes = "; ".join(opcao.descrever() for opcao in self.opcoes)
@@ -228,6 +236,32 @@ def possiveis_duplicidades(titulos: Iterable[Titulo]) -> list[PossivelDuplicidad
     ]
 
 
+def lista_de_cobranca(
+    titulos: Iterable[Titulo],
+    classificacoes: Iterable[Classificacao],
+    duplicidades: Iterable[PossivelDuplicidade],
+    data_de_referencia: date | None,
+) -> list[TituloNaCobranca]:
+    if data_de_referencia is None:
+        return []
+    em_duplicidade = {titulo for duplicidade in duplicidades for titulo in duplicidade.titulos}
+    candidatos: dict[Titulo, list[Lancamento]] = defaultdict(list)
+    for classificacao in classificacoes:
+        if classificacao.destino is not Destino.FORA_DO_ESCOPO:
+            for titulo in classificacao.titulos_candidatos:
+                candidatos[titulo].append(classificacao.lancamento)
+    return [
+        TituloNaCobranca(titulo, titulo.valor_centavos, tuple(candidatos[titulo]))
+        for titulo in sorted(titulos, key=lambda t: (t.vencimento, t.sistema_de_origem, t.documento))
+        if titulo not in em_duplicidade and titulo.valor_centavos > 0 and data_de_referencia > _cobravel_depois_de(titulo)
+    ]
+
+
+def _cobravel_depois_de(titulo: Titulo) -> date:
+    efetivo = vencimento_efetivo(titulo.vencimento)
+    return somar_dias_uteis(efetivo, _DIAS_UTEIS_DE_COMPENSACAO_DO_BOLETO) if titulo.nosso_numero else efetivo
+
+
 def _possivel_duplicidade(franqueado: str, vencimento: date, valor: int, grupo: list[Titulo]) -> PossivelDuplicidade:
     titulos = sorted(grupo, key=lambda titulo: (titulo.sistema_de_origem, titulo.documento))
     return PossivelDuplicidade(
@@ -257,6 +291,7 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
             f"O documento {lancamento.documento} é nosso número de mais de um Título em aberto: "
             f"{_documentos(candidatos)}.",
             (TipoDeEvidencia.NOSSO_NUMERO,),
+            citados=tuple(candidatos),
         )
     documentos = [c for c in cnpjs_no_texto(lancamento.historico) if raiz_do_cnpj(c) in abertos.franqueados]
     raizes = {raiz_do_cnpj(c) for c in documentos}
@@ -284,6 +319,7 @@ def _sem_identificacao(
     explicacao: str,
     evidencia: tuple[TipoDeEvidencia, ...],
     titulos: tuple[Titulo, ...] = (),
+    citados: tuple[Titulo, ...] = (),
 ) -> Classificacao:
     return Classificacao(
         lancamento=lancamento,
@@ -292,6 +328,7 @@ def _sem_identificacao(
         explicacao=explicacao,
         motivo=MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
         evidencia=evidencia,
+        citados=citados,
     )
 
 
@@ -307,7 +344,12 @@ def _por_nome(
         raiz: busca for raiz in franqueados if (busca := abertos.buscar(abertos.por_franqueado.get(raiz, []), lancamento)).fecha
     }
 
-    def fila(motivo: MotivoDeNaoIdentificacao, explicacao: str, sugeridos: tuple[Titulo, ...]) -> Classificacao:
+    def fila(
+        motivo: MotivoDeNaoIdentificacao,
+        explicacao: str,
+        sugeridos: tuple[Titulo, ...],
+        citados: tuple[Titulo, ...] = (),
+    ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             destino=Destino.FILA_DE_EXCECOES,
@@ -315,6 +357,7 @@ def _por_nome(
             explicacao=f"{identificacao}; {explicacao}.",
             motivo=motivo,
             evidencia=(TipoDeEvidencia.NOME_POR_PREFIXO,),
+            citados=citados,
         )
 
     if not titulos:
@@ -324,6 +367,7 @@ def _por_nome(
             MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
             f"o valor {valor} {_nao_fecha(titulos, lancamento, abertos.encargo)}",
             tuple(titulos) if len(titulos) == 1 else (),
+            tuple(titulos),
         )
     if len(buscas) > 1:
         por_franqueado = "; ".join(
@@ -334,11 +378,17 @@ def _por_nome(
             MotivoDeNaoIdentificacao.NOME_AMBIGUO,
             f"o valor {valor} fecha com Títulos de mais de um Franqueado: {por_franqueado}",
             (),
+            tuple(titulo for busca in buscas.values() for titulo in busca.titulos),
         )
     [busca] = buscas.values()
     opcao = busca.unica
     if opcao is None:
-        return fila(MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO, f"o valor {valor} {busca.descrever_ambiguidade()}", ())
+        return fila(
+            MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+            f"o valor {valor} {busca.descrever_ambiguidade()}",
+            (),
+            busca.titulos,
+        )
     return fila(
         MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ,
         f"o valor {valor} é Valor único: {opcao.descrever()}; o nome ainda não é Pagador conhecido",
@@ -369,6 +419,7 @@ def _por_parecer(lancamento: Lancamento, nome: str, abertos: _Titulos) -> Classi
         explicacao: str,
         evidencia: TipoDeEvidencia,
         sugeridos: tuple[Titulo, ...] = (),
+        citados: tuple[Titulo, ...] = (),
     ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
@@ -378,6 +429,7 @@ def _por_parecer(lancamento: Lancamento, nome: str, abertos: _Titulos) -> Classi
             motivo=motivo,
             evidencia=(evidencia,),
             pareceres=pareceres,
+            citados=citados,
         )
 
     respostas = {p.parecer.resposta for p in pareceres}
@@ -400,12 +452,14 @@ def _por_parecer(lancamento: Lancamento, nome: str, abertos: _Titulos) -> Classi
             MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
             f"{sem_parecer}; só o valor {valor} {busca.descrever_ambiguidade()}",
             TipoDeEvidencia.SO_VALOR,
+            citados=busca.titulos,
         )
     if len(confirmados) > 1:
         return fila(
             MotivoDeNaoIdentificacao.NOME_AMBIGUO,
             f"A IA diz que o nome é de mais de um Franqueado: raízes {', '.join(confirmados)}",
             TipoDeEvidencia.PARECER_DE_LLM,
+            citados=tuple(titulo for raiz in confirmados for titulo in candidatos[raiz].titulos),
         )
     [franqueado] = confirmados
     busca = candidatos[franqueado]
@@ -422,6 +476,7 @@ def _por_parecer(lancamento: Lancamento, nome: str, abertos: _Titulos) -> Classi
         f"Pelo parecer da IA o pagador é o Franqueado de raiz {franqueado}, mas o valor {valor} "
         f"{busca.descrever_ambiguidade()}",
         TipoDeEvidencia.PARECER_DE_LLM,
+        citados=busca.titulos,
     )
 
 
@@ -441,6 +496,7 @@ def _so_valor(lancamento: Lancamento, nome: str | None, abertos: _Titulos) -> Cl
             f"{pagador}; só o valor {valor} aponta mais de um Título em aberto: "
             f"{_documentos([titulo for titulo, _ in que_fecham])}.",
             (TipoDeEvidencia.SO_VALOR,),
+            citados=tuple(titulo for titulo, _ in que_fecham),
         )
     [(titulo, pagamento)] = que_fecham
     return _sem_identificacao(
@@ -456,7 +512,12 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
     valor = formatar_reais(lancamento.valor_centavos)
     pagador = f"CNPJ {documento} no histórico identifica o Franqueado de raiz {raiz_do_cnpj(documento)}"
 
-    def fila(motivo: MotivoDeNaoIdentificacao, explicacao: str, sugeridos: tuple[Titulo, ...] = ()) -> Classificacao:
+    def fila(
+        motivo: MotivoDeNaoIdentificacao,
+        explicacao: str,
+        sugeridos: tuple[Titulo, ...] = (),
+        citados: tuple[Titulo, ...] = (),
+    ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             evidencia=(TipoDeEvidencia.CNPJ_CPF,),
@@ -464,6 +525,7 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
             titulos=sugeridos,
             explicacao=explicacao,
             motivo=motivo,
+            citados=citados,
         )
 
     if not titulos:
@@ -481,11 +543,13 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
         return fila(
             MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
             f"{pagador}, mas o valor {valor} {busca.descrever_ambiguidade()}.",
+            citados=busca.titulos,
         )
     return fila(
         MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
         f"{pagador}, mas o valor {valor} {_nao_fecha(titulos, lancamento, abertos.encargo)}.",
         tuple(titulos) if len(titulos) == 1 else (),
+        tuple(titulos),
     )
 
 

@@ -18,6 +18,14 @@ def vencimento_efetivo(vencimento: date) -> date:
     return dia
 
 
+def somar_dias_uteis(dia: date, dias_uteis: int) -> date:
+    for _ in range(dias_uteis):
+        dia += timedelta(days=1)
+        while not eh_dia_util(dia):
+            dia += timedelta(days=1)
+    return dia
+
+
 @cache
 def _feriados_bancarios_nacionais(ano: int) -> frozenset[date]:
     pascoa = _pascoa(ano)

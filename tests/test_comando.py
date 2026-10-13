@@ -42,7 +42,14 @@ def test_comando_gera_workbook_com_resumo_no_topo_e_as_quatro_abas(tmp_path: Pat
 
     assert codigo == 0
     workbook = load_workbook(saida)
-    assert workbook.sheetnames == ["Resumo", "Lista de baixa", "Fila de exceções", "Fora do escopo", "Arquivos recusados"]
+    assert workbook.sheetnames == [
+        "Resumo",
+        "Lista de baixa",
+        "Fila de exceções",
+        "Lista de cobrança",
+        "Fora do escopo",
+        "Arquivos recusados",
+    ]
     lista = _linhas(workbook["Lista de baixa"])
     assert len(lista) == 1
     assert "NF 900101" in str(lista[0]["Títulos"])

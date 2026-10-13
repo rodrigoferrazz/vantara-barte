@@ -9,6 +9,7 @@ from conciliacao.dominio import (
     ArquivoRecusado,
     ChaveNatural,
     Classificacao,
+    DataDeReferencia,
     Destino,
     Franqueado,
     Item,
@@ -24,7 +25,9 @@ from conciliacao.dominio import (
     Resumo,
     TipoDeEvidencia,
     Titulo,
+    TituloNaCobranca,
     TotalDoDestino,
+    UltimaDataDaConta,
 )
 from conciliacao.normalizacao import raiz_do_cnpj
 
@@ -101,9 +104,28 @@ CREATE TABLE IF NOT EXISTS itens_de_titulo_titulos (
     item_id INTEGER NOT NULL REFERENCES itens_de_titulo(id),
     titulo_id INTEGER NOT NULL REFERENCES titulos(id)
 );
+CREATE TABLE IF NOT EXISTS ultimas_datas_das_contas (
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    banco TEXT NOT NULL,
+    conta TEXT NOT NULL,
+    ultima_data TEXT
+);
+CREATE TABLE IF NOT EXISTS cobranca (
+    id INTEGER PRIMARY KEY,
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    titulo_id INTEGER NOT NULL REFERENCES titulos(id),
+    saldo_centavos INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cobranca_creditos_candidatos (
+    cobranca_id INTEGER NOT NULL REFERENCES cobranca(id),
+    lancamento_id INTEGER NOT NULL REFERENCES lancamentos(id)
+);
 """
 
 _COLUNAS_LANCAMENTO = "banco, conta, data, natureza, valor_centavos, historico, documento, ordinal"
+_COLUNAS_TITULO = (
+    "t.sistema_de_origem, t.documento, t.cliente, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
+)
 
 
 class Armazenamento:
@@ -154,6 +176,10 @@ class Armazenamento:
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
 
+    def ultimas_datas(self) -> dict[tuple[str, str], date]:
+        linhas = self._conexao.execute("SELECT banco, conta, MAX(data) FROM lancamentos GROUP BY banco, conta")
+        return {(banco, conta): date.fromisoformat(data) for banco, conta, data in linhas}
+
     def franqueados(self) -> dict[str, Franqueado]:
         nomes: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
         linhas = self._conexao.execute("SELECT DISTINCT cnpj, sistema_de_origem, cliente FROM titulos")
@@ -172,6 +198,8 @@ class Armazenamento:
         titulos: Iterable[Titulo],
         classificacoes: Iterable[tuple[int, Classificacao]],
         duplicidades: Iterable[PossivelDuplicidade],
+        data_de_referencia: DataDeReferencia,
+        cobranca: Iterable[tuple[TituloNaCobranca, tuple[int, ...]]],
     ) -> int:
         cursor = self._conexao.execute(
             "INSERT INTO execucoes (momento, lancamentos_novos) VALUES (?, ?)",
@@ -221,6 +249,22 @@ class Armazenamento:
             )
         for duplicidade in duplicidades:
             self._registrar_duplicidade(execucao, duplicidade, id_do_titulo)
+        self._conexao.executemany(
+            "INSERT INTO ultimas_datas_das_contas (execucao_id, banco, conta, ultima_data) VALUES (?, ?, ?, ?)",
+            [
+                (execucao, c.banco, c.conta, c.ultima_data.isoformat() if c.ultima_data else None)
+                for c in data_de_referencia.contas
+            ],
+        )
+        for na_cobranca, creditos in cobranca:
+            cobranca_id = self._conexao.execute(
+                "INSERT INTO cobranca (execucao_id, titulo_id, saldo_centavos) VALUES (?, ?, ?)",
+                (execucao, id_do_titulo[na_cobranca.titulo], na_cobranca.saldo_centavos),
+            ).lastrowid
+            self._conexao.executemany(
+                "INSERT INTO cobranca_creditos_candidatos (cobranca_id, lancamento_id) VALUES (?, ?)",
+                [(cobranca_id, lancamento_id) for lancamento_id in creditos],
+            )
         return execucao
 
     def _registrar_duplicidade(
@@ -279,8 +323,42 @@ class Armazenamento:
             totais=totais,
             itens_com_parecer=sum(1 for item in itens if item.pareceres and not item.ia_indisponivel),
             itens_ia_indisponivel=sum(1 for item in itens if item.ia_indisponivel),
+            data_de_referencia=self._data_de_referencia(execucao),
         )
-        return Resultado(resumo=resumo, itens=itens, itens_de_titulo=tuple(self._itens_de_titulo(execucao)))
+        return Resultado(
+            resumo=resumo,
+            itens=itens,
+            itens_de_titulo=tuple(self._itens_de_titulo(execucao)),
+            cobranca=tuple(self._cobranca(execucao)),
+        )
+
+    def _data_de_referencia(self, execucao: int) -> DataDeReferencia:
+        linhas = self._conexao.execute(
+            "SELECT banco, conta, ultima_data FROM ultimas_datas_das_contas WHERE execucao_id = ? ORDER BY rowid",
+            (execucao,),
+        )
+        return DataDeReferencia(
+            tuple(
+                UltimaDataDaConta(banco, conta, date.fromisoformat(data) if data else None)
+                for banco, conta, data in linhas
+            )
+        )
+
+    def _cobranca(self, execucao: int) -> Iterator[TituloNaCobranca]:
+        linhas = self._conexao.execute(
+            "SELECT id, titulo_id, saldo_centavos FROM cobranca WHERE execucao_id = ? ORDER BY id", (execucao,)
+        ).fetchall()
+        for cobranca_id, titulo_id, saldo in linhas:
+            creditos = self._conexao.execute(
+                f"SELECT {_COLUNAS_LANCAMENTO} FROM cobranca_creditos_candidatos c"
+                " JOIN lancamentos l ON l.id = c.lancamento_id WHERE c.cobranca_id = ? ORDER BY l.data, l.id",
+                (cobranca_id,),
+            )
+            yield TituloNaCobranca(
+                titulo=self._titulo(titulo_id),
+                saldo_centavos=saldo,
+                creditos_candidatos=tuple(_lancamento(linha) for linha in creditos),
+            )
 
     def _itens_de_titulo(self, execucao: int) -> Iterator[ItemDeTitulo]:
         linhas = self._conexao.execute(
@@ -331,23 +409,29 @@ class Armazenamento:
 
     def _titulos_ligados(self, ligacao: str, item_id: int) -> tuple[Titulo, ...]:
         linhas = self._conexao.execute(
-            "SELECT t.sistema_de_origem, t.documento, t.cliente, t.cnpj, t.nosso_numero, t.vencimento,"
-            f" t.valor_centavos FROM {ligacao} it JOIN titulos t ON t.id = it.titulo_id"
+            f"SELECT {_COLUNAS_TITULO} FROM {ligacao} it JOIN titulos t ON t.id = it.titulo_id"
             " WHERE it.item_id = ? ORDER BY t.id",
             (item_id,),
         )
-        return tuple(
-            Titulo(
-                sistema_de_origem=sistema,
-                documento=documento,
-                cliente=cliente,
-                cnpj=cnpj,
-                nosso_numero=nosso_numero,
-                vencimento=date.fromisoformat(vencimento),
-                valor_centavos=valor,
-            )
-            for sistema, documento, cliente, cnpj, nosso_numero, vencimento, valor in linhas
+        return tuple(_titulo(linha) for linha in linhas)
+
+    def _titulo(self, titulo_id: int) -> Titulo:
+        return _titulo(
+            self._conexao.execute(f"SELECT {_COLUNAS_TITULO} FROM titulos t WHERE t.id = ?", (titulo_id,)).fetchone()
         )
+
+
+def _titulo(linha: tuple[str, str, str, str, str | None, str, int]) -> Titulo:
+    sistema, documento, cliente, cnpj, nosso_numero, vencimento, valor = linha
+    return Titulo(
+        sistema_de_origem=sistema,
+        documento=documento,
+        cliente=cliente,
+        cnpj=cnpj,
+        nosso_numero=nosso_numero,
+        vencimento=date.fromisoformat(vencimento),
+        valor_centavos=valor,
+    )
 
 
 def _parametros_da_chave(chave: ChaveNatural) -> tuple[object, ...]:

@@ -250,3 +250,40 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** num conjunto de 9 pares de nomes inventados, o `qwen2.5:3b` acertou 6 com esse prompt; com a primeira versão, que só descrevia a tarefa, respondia sim para todos os nomes sem relação. Errar para "não" mantém a sugestão por valor e só muda o Motivo; errar para "sim" daria um "pagador provável" falso.
 - **Alternativas:** exemplos dentro do prompt (few-shot), que pioraram para 4 de 9; modelo maior (não cabe no M2 de 8 GB com folga).
 - **Exemplo que sai da regra:** na amostra, a spec espera "pagador provável, primeira vez" com parecer positivo para TED DOCE PONTO COM ALIME e PIX SABOR CIA. O `qwen2.5:3b` com este prompt responde "não" nos dois, então ficam "sem identificação do pagador", mantendo as sugestões NF 104533 + NF 104588 e NF 104552. É limitação do modelo, não da regra; o prompt não foi ajustado aos nomes da amostra.
+
+## Ticket 09: última data de cada conta e conta sem Extrato
+
+- **Decisão:** a última data de uma conta configurada é a do lançamento mais recente (Crédito ou débito) já guardado dela, de qualquer execução. A Data de referência é a menor entre as contas configuradas (banco + conta, sem repetir). Se alguma conta configurada nunca teve Extrato, não há Data de referência e a Lista de cobrança sai vazia; o Resumo mostra "sem Data de referência" e aponta a conta "sem Extrato". Em empate, todas as contas com a menor data aparecem como as que seguram.
+- **Por quê:** a spec quer que um Extrato atrasado nunca mande pagador para cobrança; uma conta sem Extrato nenhum é o caso extremo. Usar todo o histórico guardado evita que uma execução só com o Extrato de uma conta faça a data de outra "sumir".
+- **Alternativas:** ignorar contas sem Extrato (cobraria quem pode ter pago nelas); usar só os Extratos da execução (a data dependeria de quais arquivos vieram naquele dia).
+
+## Ticket 09: o que é Crédito candidato
+
+- **Decisão:** um Título tem Crédito candidato quando algum item da Lista de baixa ou da Fila de exceções o propõe, o sugere ou o cita como possível destino do Crédito: opções de "mais de uma combinação possível" e "nome ambíguo", Títulos comparados em "valor não fecha", nosso número de mais de um Título e Títulos que só o valor aponta. A classificação ganhou `citados` para carregar esses Títulos sem virar sugestão. Título com Crédito candidato sai da cobrança e aparece em "em análise", com os itens dos Créditos.
+- **Por quê:** o ticket diz "na Lista ou na Fila", e a história 43 quer que nunca se cobre quem já pagou; um Crédito que fecha com dois Títulos sem saber qual é candidato dos dois.
+- **Alternativas:** só Títulos sugeridos (cobraria Títulos que um Crédito pendente pode quitar); só a Fila como "em análise", como na contagem da amostra.
+- **Exemplo que sai da regra:** a amostra de julho espera 9 Títulos em análise, que são só os sugeridos na Fila. Pela regra do ticket, os Títulos propostos na Lista de baixa ainda não confirmada também ficam em análise, e a amostra dá 14 (NF 104580 fica fora por estar em Possível duplicidade). O ticket 17 precisa decidir isso com o usuário.
+
+## Ticket 09: vencido, boleto e janela de compensação
+
+- **Decisão:** Título vencido é o de Vencimento efetivo estritamente antes da Data de referência. Boleto é o Título com nosso número; ele só entra na cobrança depois do segundo dia útil seguinte ao Vencimento efetivo (vencido na quinta, com sexta e segunda de compensação, é cobrável a partir da terça). A janela de 2 dias úteis é constante do motor, porque a spec a fixa.
+- **Por quê:** no dia do Vencimento efetivo o pagamento ainda está em dia; o nosso número é o que identifica a Cobrança do boleto nos dados que existem hoje.
+- **Alternativas:** usar a coluna "tipo" do Protheus (é Produto/Royalty/Serviço, não meio de pagamento); janela em configuração (a spec não pede).
+
+## Ticket 09: Possível duplicidade fora da cobrança e de "em análise"
+
+- **Decisão:** Títulos de uma Possível duplicidade não aparecem na Lista de cobrança nem em "em análise", mesmo com Crédito candidato; continuam como item de Título na Fila.
+- **Por quê:** a spec diz "sem duplicidade" e o item de Título já pede a decisão à Analista; mostrar o mesmo Título em dois lugares do time de cobrança só confundiria.
+- **Alternativas:** mostrá-los em "em análise" quando têm Crédito candidato.
+
+## Ticket 09: Saldo antes das decisões
+
+- **Decisão:** enquanto não há baixa confirmada na plataforma (tickets 12 e 14), o Saldo de cada Título é o valor da exportação atual do ERP. A Lista de cobrança guarda o Saldo por Título na execução, para que o cálculo pelas decisões entre depois sem mudar as saídas.
+- **Por quê:** pelo CONTEXT, sem baixas confirmadas o Saldo é o valor, e um valor que mudou no ERP é o novo Saldo.
+- **Alternativas:** antecipar o registro de decisões só para este cálculo (escopo do ticket 12).
+
+## Ticket 09: Lista de cobrança no workbook e no Resumo
+
+- **Decisão:** a aba "Lista de cobrança" vem logo depois da Fila de exceções, com Título, Sistema de origem, Franqueado, CNPJ, Vencimento, Vencimento efetivo, Valor e Saldo; abaixo, depois de uma linha vazia, o bloco "Em análise" com as mesmas colunas e "Créditos candidatos" (identificadores dos itens). O Resumo ganha "Data de referência", "Conta que segura a Data de referência", "Lista de cobrança" e "Títulos em análise" (quantidade e Saldo). A Data de referência e a cobrança ficam guardadas por execução (`ultimas_datas_das_contas`, `cobranca`, `cobranca_creditos_candidatos`). O teste do comando que listava exatamente as abas passou a incluir "Lista de cobrança".
+- **Por quê:** a spec ordena as abas assim e pede "em análise" à parte na mesma aba; o resultado guardado é a única origem das saídas.
+- **Alternativas:** aba separada para "em análise"; uma coluna de situação numa tabela só (não fica "à parte").

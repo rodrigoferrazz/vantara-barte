@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] Data de referência é a menor das últimas datas entre os Extratos, nunca a data do computador
-- [ ] Resumo mostra a conta que segura a Data de referência
-- [ ] Título com Crédito candidato na Lista ou na Fila não entra na cobrança e aparece como 'em análise'
-- [ ] Título marcado como Possível duplicidade não entra na cobrança
-- [ ] Boleto dentro de 2 dias úteis após o Vencimento efetivo não entra na cobrança
+- [x] Data de referência é a menor das últimas datas entre os Extratos, nunca a data do computador
+- [x] Resumo mostra a conta que segura a Data de referência
+- [x] Título com Crédito candidato na Lista ou na Fila não entra na cobrança e aparece como 'em análise'
+- [x] Título marcado como Possível duplicidade não entra na cobrança
+- [x] Boleto dentro de 2 dias úteis após o Vencimento efetivo não entra na cobrança
 - [ ] Título com pagamento parcial confirmado entra só pelo Saldo
 
 Spec: `.scratch/conciliacao-fase1/spec.md`
