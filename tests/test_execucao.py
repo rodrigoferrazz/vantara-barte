@@ -11,18 +11,6 @@ from conciliacao.motor import conciliar
 from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
 
 
-@pytest.fixture
-def pasta(tmp_path: Path) -> Path:
-    entrada = tmp_path / "entrada"
-    entrada.mkdir()
-    return entrada
-
-
-@pytest.fixture
-def armazenamento(tmp_path: Path) -> Armazenamento:
-    return Armazenamento(tmp_path / "estado.sqlite")
-
-
 def test_liquidacao_com_nosso_numero_e_valor_exato_vai_para_a_lista_com_explicacao(
     pasta: Path, armazenamento: Armazenamento
 ) -> None:

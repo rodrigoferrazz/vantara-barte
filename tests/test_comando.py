@@ -42,7 +42,7 @@ def test_comando_gera_workbook_com_resumo_no_topo_e_as_quatro_abas(tmp_path: Pat
 
     assert codigo == 0
     workbook = load_workbook(saida)
-    assert workbook.sheetnames == ["Resumo", "Lista de baixa", "Fila de exceções", "Fora do escopo"]
+    assert workbook.sheetnames == ["Resumo", "Lista de baixa", "Fila de exceções", "Fora do escopo", "Arquivos recusados"]
     lista = _linhas(workbook["Lista de baixa"])
     assert len(lista) == 1
     assert "NF 900101" in str(lista[0]["Títulos"])
@@ -68,6 +68,37 @@ def test_comando_falha_com_mensagem_quando_a_configuracao_nao_existe(
 
     assert codigo != 0
     assert "nao_existe.toml" in capsys.readouterr().err
+
+
+def test_comando_lista_arquivos_recusados_em_aba_propria_e_conta_lidos_e_recusados_no_resumo(tmp_path: Path) -> None:
+    pasta = tmp_path / "entrada"
+    pasta.mkdir()
+    escrever_protheus(pasta, [])
+    escrever_extrato_itau(pasta, [LinhaItau("07/03/2025", "PIX RECEBIDO FULANO", "250,00")])
+    escrever_extrato_itau(pasta, [LinhaItau("07/03/2025", "PIX RECEBIDO FULANO", "250,00")], nome="sem_conta.csv")
+    (pasta / "estranho.txt").write_text("qualquer coisa\n", encoding="utf-8")
+    saida = tmp_path / "conciliacao.xlsx"
+
+    codigo = main(
+        [
+            str(pasta),
+            "--configuracao",
+            str(_escrever_configuracao(tmp_path / "conciliacao.toml")),
+            "--estado",
+            str(tmp_path / "estado.sqlite"),
+            "--saida",
+            str(saida),
+        ]
+    )
+
+    assert codigo == 0
+    workbook = load_workbook(saida)
+    recusados = _linhas(workbook["Arquivos recusados"])
+    assert [linha["Arquivo"] for linha in recusados] == ["estranho.txt", "sem_conta.csv"]
+    assert all(linha["Motivo"] for linha in recusados)
+    resumo = {linha[0]: linha[1] for linha in workbook["Resumo"].iter_rows(values_only=True)}
+    assert resumo["Arquivos lidos"] == 2
+    assert resumo["Arquivos recusados"] == 2
 
 
 def _linhas(aba: Worksheet) -> list[dict[str, object]]:

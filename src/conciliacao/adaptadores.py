@@ -29,6 +29,7 @@ class ConteudoDoArquivo:
 
 
 class Adaptador(Protocol):
+    nome: str
     cabecalho: tuple[str, ...]
     separador: str
 
@@ -36,6 +37,7 @@ class Adaptador(Protocol):
 
 
 class ProtheusContasAReceber:
+    nome = "exportação Protheus"
     cabecalho: tuple[str, ...] = ("cliente", "cnpj", "unidade", "documento", "nosso_numero", "tipo", "emissao", "vencimento", "valor", "status")
     separador = ";"
 
@@ -60,6 +62,7 @@ class ProtheusContasAReceber:
 
 
 class ExtratoItau:
+    nome = "Extrato Itaú"
     banco = "itau"
     cabecalho: tuple[str, ...] = ("data", "historico", "documento", "valor", "tipo")
     separador = ";"
@@ -91,7 +94,8 @@ class ExtratoItau:
         return ConteudoDoArquivo(lancamentos=lancamentos)
 
 
-ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), ExtratoItau())
+EXTRATOS: tuple[ExtratoItau, ...] = (ExtratoItau(),)
+ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), *EXTRATOS)
 
 
 def ler_pasta(pasta: Path, configuracao: Configuracao) -> Leitura:
@@ -113,15 +117,57 @@ def _ler_arquivo(arquivo: Path, configuracao: Configuracao) -> ConteudoDoArquivo
         texto = arquivo.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         raise Recusa("o arquivo não é texto UTF-8") from None
+    if not texto.strip():
+        raise Recusa("o arquivo está vazio")
     for adaptador in ADAPTADORES:
-        linhas = list(csv.reader(texto.splitlines(), delimiter=adaptador.separador))
-        if linhas and tuple(linhas[0]) == adaptador.cabecalho:
+        linhas = _linhas(texto, adaptador)
+        if tuple(linhas[0]) == adaptador.cabecalho:
             corpo = [linha for linha in linhas[1:] if linha]
             for numero, linha in enumerate(corpo, start=2):
                 if len(linha) != len(adaptador.cabecalho):
                     raise Recusa(f"linha {numero}: {len(linha)} colunas, o layout tem {len(adaptador.cabecalho)}")
             return adaptador.ler(arquivo, corpo, configuracao)
-    raise Recusa("cabeçalho não corresponde a nenhum layout conhecido")
+    raise Recusa(_motivo_do_cabecalho_desconhecido(arquivo, texto, configuracao))
+
+
+def _linhas(texto: str, adaptador: Adaptador) -> list[list[str]]:
+    return list(csv.reader(texto.splitlines(), delimiter=adaptador.separador))
+
+
+def _motivo_do_cabecalho_desconhecido(arquivo: Path, texto: str, configuracao: Configuracao) -> str:
+    bancos_com_adaptador = {extrato.banco for extrato in EXTRATOS}
+    contas = [conta for conta in configuracao.contas if fnmatch(arquivo.name, conta.padrao)]
+    if len(contas) == 1 and contas[0].banco not in bancos_com_adaptador:
+        conta = contas[0]
+        return f"Extrato do banco '{conta.banco}' (conta {conta.conta}), que não tem adaptador; nenhum layout dele é aceito"
+    em_comum = {adaptador: _colunas_em_comum(_linhas(texto, adaptador)[0], adaptador) for adaptador in ADAPTADORES}
+    maior = max(em_comum.values())
+    mais_proximos = [adaptador for adaptador, quantidade in em_comum.items() if quantidade == maior]
+    if maior == 0 or len(mais_proximos) > 1:
+        return "cabeçalho não corresponde a nenhum layout conhecido"
+    adaptador = mais_proximos[0]
+    return f"cabeçalho difere do layout {adaptador.nome}: {_diferenca(_linhas(texto, adaptador)[0], adaptador.cabecalho)}"
+
+
+def _colunas_em_comum(cabecalho: list[str], adaptador: Adaptador) -> int:
+    return len(set(cabecalho) & set(adaptador.cabecalho))
+
+
+def _diferenca(encontrado: list[str], esperado: tuple[str, ...]) -> str:
+    faltam = list((Counter(esperado) - Counter(encontrado)).elements())
+    a_mais = list((Counter(encontrado) - Counter(esperado)).elements())
+    partes = []
+    if faltam:
+        partes.append(f"falta {_colunas(faltam)}")
+    if a_mais:
+        partes.append(f"a mais {_colunas(a_mais)}")
+    if not partes:
+        partes.append(f"colunas fora da ordem ({_colunas(encontrado)}); a ordem esperada é {_colunas(list(esperado))}")
+    return "; ".join(partes)
+
+
+def _colunas(colunas: list[str]) -> str:
+    return ", ".join(f"'{coluna}'" for coluna in colunas)
 
 
 def _conta_do_extrato(arquivo: Path, configuracao: Configuracao) -> ContaDeExtrato:

@@ -4,7 +4,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from conciliacao.dominio import Destino, Item, Resultado, Titulo
+from conciliacao.dominio import ArquivoRecusado, Destino, Item, Resultado, Titulo
 from conciliacao.normalizacao import formatar_reais
 
 _FORMATO_DE_VALOR = "#,##0.00"
@@ -24,13 +24,16 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
         ("Motivo", "Títulos sugeridos", "Explicação"),
     )
     _aba_de_itens(workbook.create_sheet(Destino.FORA_DO_ESCOPO.value), resultado.fora_do_escopo, ("Explicação",))
+    _aba_de_arquivos_recusados(workbook.create_sheet("Arquivos recusados"), resultado.arquivos_recusados)
     workbook.save(caminho)
 
 
 def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
     resumo = resultado.resumo
     aba.append(("Execução", resumo.execucao))
-    aba.append(("Arquivos lidos", f"{len(resumo.arquivos_lidos)}: {', '.join(resumo.arquivos_lidos)}"))
+    aba.append(("Arquivos lidos", len(resumo.arquivos_lidos)))
+    for lido in resumo.arquivos_lidos:
+        aba.append((f"Lido: {lido}", ""))
     aba.append(("Arquivos recusados", len(resumo.arquivos_recusados)))
     for recusado in resumo.arquivos_recusados:
         aba.append((f"Recusado: {recusado.nome}", recusado.motivo))
@@ -65,6 +68,15 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
         )
         aba.cell(row=aba.max_row, column=4).number_format = _FORMATO_DE_DATA
         aba.cell(row=aba.max_row, column=7).number_format = _FORMATO_DE_VALOR
+    aba.freeze_panes = "A2"
+
+
+def _aba_de_arquivos_recusados(aba: Worksheet, recusados: tuple[ArquivoRecusado, ...]) -> None:
+    aba.append(("Arquivo", "Motivo"))
+    for recusado in recusados:
+        aba.append((recusado.nome, recusado.motivo))
+    aba.column_dimensions["A"].width = 40
+    aba.column_dimensions["B"].width = 100
     aba.freeze_panes = "A2"
 
 

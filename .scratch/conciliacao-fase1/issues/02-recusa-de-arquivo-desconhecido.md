@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] Arquivo com coluna a mais, a menos ou renomeada é recusado com motivo que cita a diferença
-- [ ] Arquivo com data ou número em formato inesperado é recusado com motivo, sem processar parcialmente
-- [ ] Extrato de banco sem adaptador ou com nome fora da configuração de contas é recusado com motivo
-- [ ] Os demais arquivos da mesma pasta são processados e a conferência de soma considera só os aceitos
-- [ ] Aba Arquivos recusados no workbook e contagem de lidos e recusados no Resumo
+- [x] Arquivo com coluna a mais, a menos ou renomeada é recusado com motivo que cita a diferença
+- [x] Arquivo com data ou número em formato inesperado é recusado com motivo, sem processar parcialmente
+- [x] Extrato de banco sem adaptador ou com nome fora da configuração de contas é recusado com motivo
+- [x] Os demais arquivos da mesma pasta são processados e a conferência de soma considera só os aceitos
+- [x] Aba Arquivos recusados no workbook e contagem de lidos e recusados no Resumo
 
 Spec: `.scratch/conciliacao-fase1/spec.md`
