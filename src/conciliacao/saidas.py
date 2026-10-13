@@ -7,6 +7,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from conciliacao.calendario import vencimento_efetivo
 from conciliacao.dominio import (
     ArquivoRecusado,
+    BaixaManual,
     CausaRaiz,
     Destino,
     GrupoDaCausaRaiz,
@@ -14,10 +15,17 @@ from conciliacao.dominio import (
     ItemDeTitulo,
     Resultado,
     Resumo,
+    TipoDeDecisao,
     Titulo,
     TituloNaCobranca,
 )
 from conciliacao.normalizacao import formatar_reais
+
+ABA_DA_LISTA_DE_BAIXA = Destino.LISTA_DE_BAIXA.value
+LINHA_DA_EXECUCAO_NO_RESUMO = "Execução"
+COLUNA_DO_ITEM = "Item"
+COLUNA_DA_DECISAO = "Decisão"
+COLUNA_DO_MOTIVO_DA_REJEICAO = "Motivo da rejeição"
 
 _FORMATO_DE_VALOR = "#,##0.00"
 _FORMATO_DE_DATA = "DD/MM/YYYY"
@@ -30,7 +38,12 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     assert resumo is not None
     resumo.title = "Resumo"
     _preencher_resumo(resumo, resultado)
-    _aba_de_itens(workbook.create_sheet(Destino.LISTA_DE_BAIXA.value), resultado.lista_de_baixa, ("Títulos", "Explicação"))
+    _aba_de_itens(
+        workbook.create_sheet(ABA_DA_LISTA_DE_BAIXA),
+        resultado.lista_de_baixa,
+        ("Títulos", "Explicação", COLUNA_DA_DECISAO, COLUNA_DO_MOTIVO_DA_REJEICAO),
+    )
+    _aba_de_baixa_manual(workbook.create_sheet("Baixa manual no ERP"), resultado.baixa_manual)
     fila = workbook.create_sheet(Destino.FILA_DE_EXCECOES.value)
     _aba_de_itens(
         fila,
@@ -47,7 +60,7 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
 
 def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
     resumo = resultado.resumo
-    aba.append(("Execução", resumo.execucao))
+    aba.append((LINHA_DA_EXECUCAO_NO_RESUMO, resumo.execucao))
     aba.append(("Arquivos lidos", len(resumo.arquivos_lidos)))
     for lido in resumo.arquivos_lidos:
         aba.append((f"Lido: {lido}", ""))
@@ -74,6 +87,16 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
     aba.append(("Lista de cobrança", _total_da_cobranca(resultado.lista_de_cobranca)))
     aba.append(("Títulos em análise", _total_da_cobranca(resultado.em_analise)))
     aba.append(("IA (parecer de nome)", _situacao_da_ia(resumo)))
+    decisoes = resumo.decisoes
+    aba.append(
+        (
+            "Decisões lidas do Excel",
+            f"{decisoes.confirmadas} confirmada(s), {decisoes.rejeitadas} rejeitada(s), "
+            f"{len(decisoes.nao_aplicadas)} não aplicada(s)",
+        )
+    )
+    for aviso in decisoes.nao_aplicadas:
+        aba.append(("Decisão não aplicada", aviso))
     aba.column_dimensions["A"].width = 32
     aba.column_dimensions["B"].width = 60
 
@@ -97,7 +120,7 @@ def _situacao_da_ia(resumo: Resumo) -> str:
 
 
 def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[str, ...]) -> None:
-    aba.append(("Item", "Banco", "Conta", "Data", "Histórico", "Documento", "Valor", *colunas_do_destino))
+    aba.append((COLUNA_DO_ITEM, "Banco", "Conta", "Data", "Histórico", "Documento", "Valor", *colunas_do_destino))
     for item in itens:
         lancamento = item.lancamento
         valores_do_destino = {
@@ -108,6 +131,8 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
             "O que falta": item.o_que_falta,
             "Explicação": item.explicacao,
             "Parecer da IA": "; ".join(parecer.descrever() for parecer in item.pareceres),
+            COLUNA_DA_DECISAO: TipoDeDecisao.CONFIRMAR.value,
+            COLUNA_DO_MOTIVO_DA_REJEICAO: None,
         }
         aba.append(
             (
@@ -123,6 +148,48 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
         )
         aba.cell(row=aba.max_row, column=4).number_format = _FORMATO_DE_DATA
         aba.cell(row=aba.max_row, column=7).number_format = _FORMATO_DE_VALOR
+    aba.freeze_panes = "A2"
+
+
+def _aba_de_baixa_manual(aba: Worksheet, baixas: tuple[BaixaManual, ...]) -> None:
+    aba.append(
+        (
+            "Título",
+            "Sistema de origem",
+            "Franqueado",
+            "CNPJ",
+            "Vencimento",
+            "Valor principal",
+            "Encargo",
+            "Item",
+            "Data do Crédito",
+            "Banco",
+            "Conta",
+            "Valor do Crédito",
+        )
+    )
+    for baixa in baixas:
+        titulo, credito = baixa.titulo, baixa.credito
+        aba.append(
+            (
+                titulo.documento,
+                titulo.sistema_de_origem,
+                titulo.cliente,
+                titulo.cnpj,
+                titulo.vencimento,
+                Decimal(baixa.principal_centavos) / 100,
+                Decimal(baixa.encargo_centavos) / 100,
+                baixa.item,
+                credito.data,
+                credito.banco,
+                credito.conta,
+                Decimal(credito.valor_centavos) / 100,
+            )
+        )
+        for coluna in (5, 9):
+            aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_DATA
+        for coluna in (6, 7, 12):
+            aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_VALOR
     aba.freeze_panes = "A2"
 
 

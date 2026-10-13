@@ -33,7 +33,11 @@ def main(argumentos: list[str] | None = None) -> int:
     armazenamento = Armazenamento(opcoes.estado)
     try:
         resultado = executar_conciliacao(
-            opcoes.pasta, armazenamento, configuracao, parecerista_da_configuracao(configuracao.ia)
+            opcoes.pasta,
+            armazenamento,
+            configuracao,
+            parecerista_da_configuracao(configuracao.ia),
+            workbook_anterior=opcoes.saida,
         )
     except ConferenciaDeSomaFalhou as erro:
         print(str(erro), file=sys.stderr)

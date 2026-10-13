@@ -1,6 +1,6 @@
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 from fractions import Fraction
 from typing import ClassVar
@@ -66,6 +66,17 @@ class TipoDeEvidencia(StrEnum):
     NOME_POR_PREFIXO = "nome por prefixo"
     SO_VALOR = "só valor"
     PARECER_DE_LLM = "parecer de LLM"
+
+
+class RegraDaProposta(StrEnum):
+    NOSSO_NUMERO_E_VALOR = "nosso número + valor exato ou dentro do Encargo"
+    DOCUMENTO_E_VALOR_UNICO = "CNPJ/CPF + Valor único"
+    DOCUMENTO_E_SOMA_EXATA = "CNPJ/CPF + soma exata com uma única combinação"
+
+
+class TipoDeDecisao(StrEnum):
+    CONFIRMAR = "confirmar"
+    REJEITAR = "rejeitar"
 
 
 class Resposta(StrEnum):
@@ -166,6 +177,7 @@ class Classificacao:
     citados: tuple[Titulo, ...] = ()
     franqueado: str | None = None
     canal: Canal | None = None
+    regra: RegraDaProposta | None = None
 
     @property
     def titulos_candidatos(self) -> tuple[Titulo, ...]:
@@ -184,6 +196,7 @@ class Item:
     pareceres: tuple[ParecerSobreFranqueado, ...]
     franqueado: str | None = None
     canal: Canal | None = None
+    regra: RegraDaProposta | None = None
 
     @property
     def o_que_falta(self) -> str:
@@ -192,6 +205,48 @@ class Item:
     @property
     def ia_indisponivel(self) -> bool:
         return any(p.parecer.resposta is Resposta.INDISPONIVEL for p in self.pareceres)
+
+
+@dataclass(frozen=True)
+class ParRejeitado:
+    credito: ChaveNatural
+    sistema_de_origem: str
+    documento: str
+    motivo: str
+
+    def rejeita(self, titulo: Titulo) -> bool:
+        return (self.sistema_de_origem, self.documento) == (titulo.sistema_de_origem, titulo.documento)
+
+
+@dataclass(frozen=True)
+class DecisaoRegistrada:
+    item: str
+    tipo: TipoDeDecisao
+    motivo: str | None
+    autor: str
+    momento: datetime
+    origem: str
+    execucao: int
+    titulos: tuple[Titulo, ...]
+    evidencia: tuple[TipoDeEvidencia, ...]
+    explicacao: str
+    regra: RegraDaProposta | None
+
+
+@dataclass(frozen=True)
+class BaixaManual:
+    item: str
+    titulo: Titulo
+    principal_centavos: int
+    encargo_centavos: int
+    credito: Lancamento
+
+
+@dataclass(frozen=True)
+class DecisoesLidas:
+    confirmadas: int = 0
+    rejeitadas: int = 0
+    nao_aplicadas: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -261,6 +316,7 @@ class Resumo:
     itens_com_parecer: int
     itens_ia_indisponivel: int
     data_de_referencia: DataDeReferencia
+    decisoes: DecisoesLidas
 
 
 @dataclass(frozen=True)
@@ -332,6 +388,7 @@ class Resultado:
     itens_de_titulo: tuple[ItemDeTitulo, ...]
     cobranca: tuple[TituloNaCobranca, ...]
     causa_raiz: CausaRaiz
+    baixa_manual: tuple[BaixaManual, ...]
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]

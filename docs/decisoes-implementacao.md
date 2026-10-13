@@ -330,3 +330,45 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** a sugestão de um Crédito que só bate por valor depende de outros Títulos que fecham por coincidência, e a spec só exige precisão na Lista. Comparar destino e Motivo de tudo garante que o gabarito descreve os casos que diz gerar.
 - **Alternativas:** comparar só a Lista (o gerador poderia gerar casos que nunca chegam ao destino pretendido); comparar também as sugestões da Fila.
 - **Exemplo que sai da regra:** a história 27 trata a antecipação como "Crédito sem título em aberto". Numa execução só, o Franqueado identificado sempre tem outros Títulos em aberto, então pela decisão do ticket 06 a antecipação vai como "valor não fecha", sem Título, e é isso que o gabarito espera.
+
+## Ticket 12: de onde vem o workbook lido de volta
+
+- **Decisão:** a execução recebe opcionalmente o workbook anterior (`workbook_anterior`) e aplica as decisões dele antes de rodar o motor, dentro da mesma transação. O comando lê o workbook do caminho de `--saida`, se existir, antes de gerar o novo por cima.
+- **Por quê:** a Analista trabalha no arquivo que a plataforma gerou; ler o mesmo caminho evita mais uma opção na linha de comando. Na mesma transação, uma conferência de soma que falha desfaz também as decisões.
+- **Alternativas:** opção `--decisoes` separada; pasta de decisões monitorada (substituída pelo ADR 0006).
+
+## Ticket 12: quem e quando de uma decisão do Excel
+
+- **Decisão:** o autor é a propriedade "última alteração por" do arquivo, que o Excel grava ao salvar, e o momento é a data de modificação do arquivo (ou o momento da leitura, se faltar). Workbook sem autor não foi salvo por ninguém depois de gerado: nenhuma decisão é aplicada e o Resumo avisa.
+- **Por quê:** a decisão precisa de autor para ser auditável, e o "confirmar" pré-preenchido não pode confirmar o lote sozinho só porque a Analista não abriu o arquivo.
+- **Alternativas:** campo "Analista" para preencher no Resumo (uma ação a mais por dia); opção `--analista` no comando (registra quem rodou, não quem decidiu).
+
+## Ticket 12: workbook de outra execução e linhas inválidas
+
+- **Decisão:** só se aplicam decisões de um workbook cuja linha "Execução" do Resumo é a última execução guardada; senão nada é aplicado e o Resumo avisa. Na aba Lista de baixa, "confirmar" confirma; célula vazia ou "rejeitar" rejeita (exige motivo); qualquer outro texto, item que não está na Lista daquela execução e item repetido não são aplicados e viram aviso. A evidência, a explicação, a regra e os Títulos gravados na decisão vêm do item guardado da execução, não do texto do workbook.
+- **Por quê:** o identificador é estável entre execuções, mas a proposta pode mudar; decidir sobre uma proposta que não é a mostrada seria aplicar algo que a Analista não viu. Na dúvida, não aplicar e explicar (ADR 0005).
+- **Alternativas:** aplicar workbooks antigos item a item quando a proposta não mudou; tratar texto desconhecido como rejeição.
+
+## Ticket 12: efeito da confirmação
+
+- **Decisão:** Crédito confirmado deixa de ser Crédito vivo (não é mais classificado nem entra na conferência de soma das execuções seguintes) e os Títulos confirmados, identificados por Sistema de origem + documento, saem dos Títulos em aberto que vão para o motor e para a Lista de cobrança, mesmo que ainda apareçam na exportação.
+- **Por quê:** a Lista só tem pagamentos que quitam os Títulos (Diferença a menor vai para a Fila), então o Saldo de um Título confirmado é zero; mantê-lo em aberto permitiria propô-lo para outro Crédito ou cobrá-lo. Mostrar esses Títulos como Aguardando baixa no ERP fica para o ticket 14.
+- **Alternativas:** manter os Títulos em aberto até sumirem da exportação (arriscaria baixar o mesmo Título duas vezes).
+
+## Ticket 12: par rejeitado e destino do Crédito
+
+- **Decisão:** a rejeição de uma proposta registra um par rejeitado para cada Título dela. O motor recebe os pares e classifica o Crédito como se esses Títulos não estivessem em aberto para ele; a explicação cita a rejeição e o motivo. Se mesmo assim o Crédito cairia na Lista com outro Título, ele vai para a Fila como "mais de uma combinação possível", com o novo Título como sugestão.
+- **Por quê:** o ticket manda o Crédito rejeitado para a Fila e a Lista é confiada sem investigação; uma proposta de regra já errada uma vez para esse Crédito não deve voltar à Lista. "Mais de uma combinação possível" é o Motivo da lista fixa que descreve o caso: a regra fechou com mais de um Título e a Analista escolhe.
+- **Alternativas:** deixar a nova proposta ir para a Lista; rejeitar só a combinação inteira em propostas por soma (deixaria os mesmos Títulos voltarem em outra combinação).
+
+## Ticket 12: regra que gerou a proposta
+
+- **Decisão:** a Classificação da Lista passa a carregar a regra (nosso número + valor; CNPJ/CPF + Valor único; CNPJ/CPF + soma exata), guardada numa tabela própria do item e copiada para a decisão com a evidência e a explicação mostradas. Pareceres de LLM não são copiados porque a Lista nunca tem parecer.
+- **Por quê:** a explicação é texto livre; a regra como valor fixo permite auditoria e as métricas do ticket 16. Tabela própria segue o padrão de não alterar tabelas existentes de estados já criados.
+- **Alternativas:** usar só a evidência como regra (não separa Título único de soma).
+
+## Ticket 12: lista para baixa manual e Resumo
+
+- **Decisão:** aba "Baixa manual no ERP", logo depois da Lista de baixa, com uma linha por Título confirmado nesta execução: Título, Sistema de origem, Franqueado, CNPJ, Vencimento, Valor principal, Encargo (o que o Crédito pagou acima do principal; zero em soma de Títulos e em Encargo não pago), Item, data, banco, conta e valor do Crédito. O Resumo ganha "Decisões lidas do Excel" (confirmadas, rejeitadas, não aplicadas) e uma linha "Decisão não aplicada" por aviso. O teste do comando que lista exatamente as abas passou a incluir a nova aba.
+- **Por quê:** a spec põe a lista do lote confirmado no mesmo workbook, e não é arquivo de importação (ADR 0002); a Analista precisa separar principal e Encargo ao baixar.
+- **Alternativas:** arquivo separado; acumular todas as confirmações ainda não baixadas (é o Aguardando baixa no ERP do ticket 14).

@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] Cada linha do workbook tem identificador estável do item
-- [ ] Execução seguinte lê as decisões do workbook e as registra no armazenamento
-- [ ] Confirmação gera lista legível para baixa manual no Protheus, com Título, Sistema de origem, valor principal e Encargo
-- [ ] Rejeição sem motivo é sinalizada no Resumo e não é aplicada
-- [ ] Par rejeitado não volta a ser proposto em execuções futuras; o Crédito vai para a Fila
-- [ ] Toda decisão registra quem, quando, evidência mostrada e regra que gerou a proposta
+- [x] Cada linha do workbook tem identificador estável do item
+- [x] Execução seguinte lê as decisões do workbook e as registra no armazenamento
+- [x] Confirmação gera lista legível para baixa manual no Protheus, com Título, Sistema de origem, valor principal e Encargo
+- [x] Rejeição sem motivo é sinalizada no Resumo e não é aplicada
+- [x] Par rejeitado não volta a ser proposto em execuções futuras; o Crédito vai para a Fila
+- [x] Toda decisão registra quem, quando, evidência mostrada e regra que gerou a proposta
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

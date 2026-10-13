@@ -1,12 +1,18 @@
 import sqlite3
-from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
 from conciliacao.dominio import (
     ArquivoRecusado,
+    BaixaManual,
+    DecisaoRegistrada,
+    DecisoesLidas,
+    ParRejeitado,
+    RegraDaProposta,
+    TipoDeDecisao,
     Canal,
     CausaRaiz,
     ChaveNatural,
@@ -75,6 +81,10 @@ CREATE TABLE IF NOT EXISTS itens (
     explicacao TEXT NOT NULL,
     motivo TEXT
 );
+CREATE TABLE IF NOT EXISTS itens_regras (
+    item_id INTEGER NOT NULL UNIQUE REFERENCES itens(id),
+    regra TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS itens_evidencias (
     item_id INTEGER NOT NULL REFERENCES itens(id),
     tipo TEXT NOT NULL
@@ -123,6 +133,32 @@ CREATE TABLE IF NOT EXISTS cobranca (
     titulo_id INTEGER NOT NULL REFERENCES titulos(id),
     saldo_centavos INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS decisoes (
+    id INTEGER PRIMARY KEY,
+    lancamento_id INTEGER NOT NULL REFERENCES lancamentos(id),
+    execucao_do_item INTEGER NOT NULL REFERENCES execucoes(id),
+    execucao_que_aplicou INTEGER REFERENCES execucoes(id),
+    tipo TEXT NOT NULL,
+    motivo TEXT,
+    autor TEXT NOT NULL,
+    momento TEXT NOT NULL,
+    origem TEXT NOT NULL,
+    explicacao TEXT NOT NULL,
+    regra TEXT
+);
+CREATE TABLE IF NOT EXISTS decisoes_evidencias (
+    decisao_id INTEGER NOT NULL REFERENCES decisoes(id),
+    tipo TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisoes_titulos (
+    decisao_id INTEGER NOT NULL REFERENCES decisoes(id),
+    titulo_id INTEGER NOT NULL REFERENCES titulos(id),
+    encargo_centavos INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS avisos_das_decisoes (
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    texto TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cobranca_creditos_candidatos (
     cobranca_id INTEGER NOT NULL REFERENCES cobranca(id),
     lancamento_id INTEGER NOT NULL REFERENCES lancamentos(id)
@@ -130,6 +166,7 @@ CREATE TABLE IF NOT EXISTS cobranca_creditos_candidatos (
 """
 
 _COLUNAS_LANCAMENTO = "banco, conta, data, natureza, valor_centavos, historico, documento, ordinal"
+_COLUNAS_DO_LANCAMENTO_L = ", ".join(f"l.{coluna}" for coluna in _COLUNAS_LANCAMENTO.split(", "))
 _COLUNAS_TITULO = (
     "t.sistema_de_origem, t.documento, t.cliente, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
 )
@@ -176,12 +213,103 @@ class Armazenamento:
                 identificadores[chave] = linha[0]
         return identificadores, novos
 
-    def creditos_guardados(self) -> dict[int, Lancamento]:
+    def creditos_vivos(self) -> dict[int, Lancamento]:
         linhas = self._conexao.execute(
-            f"SELECT id, {_COLUNAS_LANCAMENTO} FROM lancamentos WHERE natureza = ? ORDER BY data, id",
-            (Natureza.CREDITO.value,),
+            f"SELECT id, {_COLUNAS_LANCAMENTO} FROM lancamentos WHERE natureza = ?"
+            " AND id NOT IN (SELECT lancamento_id FROM decisoes WHERE tipo = ?) ORDER BY data, id",
+            (Natureza.CREDITO.value, TipoDeDecisao.CONFIRMAR.value),
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
+
+    def ultima_execucao(self) -> int | None:
+        (execucao,) = self._conexao.execute("SELECT MAX(id) FROM execucoes").fetchone()
+        return int(execucao) if execucao is not None else None
+
+    def titulos_com_baixa_confirmada(self) -> set[tuple[str, str]]:
+        linhas = self._conexao.execute(
+            "SELECT DISTINCT t.sistema_de_origem, t.documento FROM decisoes d"
+            " JOIN decisoes_titulos dt ON dt.decisao_id = d.id JOIN titulos t ON t.id = dt.titulo_id WHERE d.tipo = ?",
+            (TipoDeDecisao.CONFIRMAR.value,),
+        )
+        return {(sistema, documento) for sistema, documento in linhas}
+
+    def pares_rejeitados(self) -> list[ParRejeitado]:
+        linhas = self._conexao.execute(
+            f"SELECT t.sistema_de_origem, t.documento, d.motivo, {_COLUNAS_DO_LANCAMENTO_L} FROM decisoes d"
+            " JOIN decisoes_titulos dt ON dt.decisao_id = d.id JOIN titulos t ON t.id = dt.titulo_id"
+            " JOIN lancamentos l ON l.id = d.lancamento_id WHERE d.tipo = ? ORDER BY d.id, t.id",
+            (TipoDeDecisao.REJEITAR.value,),
+        )
+        return [
+            ParRejeitado(_lancamento(lancamento).chave_natural, sistema, documento, motivo)
+            for sistema, documento, motivo, *lancamento in linhas
+        ]
+
+    def registrar_decisao(
+        self,
+        execucao: int,
+        item: str,
+        tipo: TipoDeDecisao,
+        motivo: str | None,
+        autor: str,
+        momento: datetime,
+        origem: str,
+        encargos: Mapping[tuple[str, str], int],
+    ) -> int:
+        lancamento_id = _lancamento_do_item(item)
+        item_id, explicacao, regra = self._conexao.execute(
+            "SELECT i.id, i.explicacao, r.regra FROM itens i LEFT JOIN itens_regras r ON r.item_id = i.id"
+            " WHERE i.execucao_id = ? AND i.lancamento_id = ?",
+            (execucao, lancamento_id),
+        ).fetchone()
+        decisao = self._conexao.execute(
+            "INSERT INTO decisoes (lancamento_id, execucao_do_item, tipo, motivo, autor, momento, origem, explicacao,"
+            " regra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (lancamento_id, execucao, tipo.value, motivo, autor, momento.isoformat(), origem, explicacao, regra),
+        ).lastrowid
+        assert decisao is not None
+        self._conexao.execute(
+            "INSERT INTO decisoes_evidencias (decisao_id, tipo) SELECT ?, tipo FROM itens_evidencias"
+            " WHERE item_id = ? ORDER BY rowid",
+            (decisao, item_id),
+        )
+        titulos = self._conexao.execute(
+            "SELECT t.id, t.sistema_de_origem, t.documento FROM itens_titulos it JOIN titulos t ON t.id = it.titulo_id"
+            " WHERE it.item_id = ? ORDER BY t.id",
+            (item_id,),
+        ).fetchall()
+        self._conexao.executemany(
+            "INSERT INTO decisoes_titulos (decisao_id, titulo_id, encargo_centavos) VALUES (?, ?, ?)",
+            [(decisao, titulo_id, encargos[(sistema, documento)]) for titulo_id, sistema, documento in titulos],
+        )
+        return decisao
+
+    def decisoes(self) -> tuple[DecisaoRegistrada, ...]:
+        linhas = self._conexao.execute(
+            "SELECT id, lancamento_id, execucao_do_item, tipo, motivo, autor, momento, origem, explicacao, regra"
+            " FROM decisoes ORDER BY id"
+        ).fetchall()
+        return tuple(
+            DecisaoRegistrada(
+                item=_identificador_do_item(lancamento_id),
+                tipo=TipoDeDecisao(tipo),
+                motivo=motivo,
+                autor=autor,
+                momento=datetime.fromisoformat(momento),
+                origem=origem,
+                execucao=execucao,
+                titulos=self._titulos_ligados("decisoes_titulos", decisao, coluna="decisao_id"),
+                evidencia=tuple(
+                    TipoDeEvidencia(t)
+                    for (t,) in self._conexao.execute(
+                        "SELECT tipo FROM decisoes_evidencias WHERE decisao_id = ? ORDER BY rowid", (decisao,)
+                    )
+                ),
+                explicacao=explicacao,
+                regra=RegraDaProposta(regra) if regra else None,
+            )
+            for decisao, lancamento_id, execucao, tipo, motivo, autor, momento, origem, explicacao, regra in linhas
+        )
 
     def ultimas_datas(self) -> dict[tuple[str, str], date]:
         linhas = self._conexao.execute("SELECT banco, conta, MAX(data) FROM lancamentos GROUP BY banco, conta")
@@ -207,6 +335,8 @@ class Armazenamento:
         duplicidades: Iterable[PossivelDuplicidade],
         data_de_referencia: DataDeReferencia,
         cobranca: Iterable[tuple[TituloNaCobranca, tuple[int, ...]]],
+        decisoes_aplicadas: Iterable[int],
+        avisos_das_decisoes: Iterable[str],
     ) -> int:
         cursor = self._conexao.execute(
             "INSERT INTO execucoes (momento, lancamentos_novos) VALUES (?, ?)",
@@ -218,6 +348,14 @@ class Armazenamento:
             "INSERT INTO arquivos (execucao_id, nome, motivo_da_recusa) VALUES (?, ?, ?)",
             [(execucao, nome, None) for nome in arquivos_lidos]
             + [(execucao, recusado.nome, recusado.motivo) for recusado in arquivos_recusados],
+        )
+        self._conexao.executemany(
+            "UPDATE decisoes SET execucao_que_aplicou = ? WHERE id = ?",
+            [(execucao, decisao) for decisao in decisoes_aplicadas],
+        )
+        self._conexao.executemany(
+            "INSERT INTO avisos_das_decisoes (execucao_id, texto) VALUES (?, ?)",
+            [(execucao, aviso) for aviso in avisos_das_decisoes],
         )
         id_do_titulo = {titulo: self._guardar_titulo(execucao, titulo) for titulo in titulos}
         for lancamento_id, classificacao in classificacoes:
@@ -231,6 +369,10 @@ class Armazenamento:
                     classificacao.motivo.value if classificacao.motivo else None,
                 ),
             ).lastrowid
+            if classificacao.regra is not None:
+                self._conexao.execute(
+                    "INSERT INTO itens_regras (item_id, regra) VALUES (?, ?)", (item, classificacao.regra.value)
+                )
             self._conexao.executemany(
                 "INSERT INTO itens_evidencias (item_id, tipo) VALUES (?, ?)",
                 [(item, tipo.value) for tipo in classificacao.evidencia],
@@ -336,6 +478,7 @@ class Armazenamento:
             itens_com_parecer=sum(1 for item in itens if item.pareceres and not item.ia_indisponivel),
             itens_ia_indisponivel=sum(1 for item in itens if item.ia_indisponivel),
             data_de_referencia=self._data_de_referencia(execucao),
+            decisoes=self._decisoes_lidas(execucao),
         )
         return Resultado(
             resumo=resumo,
@@ -346,7 +489,41 @@ class Armazenamento:
                 (item for item in itens if item.destino is Destino.FILA_DE_EXCECOES),
                 {raiz: franqueado.todos_os_nomes for raiz, franqueado in self.franqueados().items()},
             ),
+            baixa_manual=tuple(self._baixa_manual(execucao)),
         )
+
+    def _decisoes_lidas(self, execucao: int) -> DecisoesLidas:
+        tipos = Counter(
+            TipoDeDecisao(tipo)
+            for (tipo,) in self._conexao.execute(
+                "SELECT tipo FROM decisoes WHERE execucao_que_aplicou = ?", (execucao,)
+            )
+        )
+        avisos = self._conexao.execute(
+            "SELECT texto FROM avisos_das_decisoes WHERE execucao_id = ? ORDER BY rowid", (execucao,)
+        )
+        return DecisoesLidas(
+            confirmadas=tipos[TipoDeDecisao.CONFIRMAR],
+            rejeitadas=tipos[TipoDeDecisao.REJEITAR],
+            nao_aplicadas=tuple(texto for (texto,) in avisos),
+        )
+
+    def _baixa_manual(self, execucao: int) -> Iterator[BaixaManual]:
+        linhas = self._conexao.execute(
+            f"SELECT d.lancamento_id, dt.titulo_id, dt.encargo_centavos, {_COLUNAS_DO_LANCAMENTO_L} FROM decisoes d"
+            " JOIN decisoes_titulos dt ON dt.decisao_id = d.id JOIN lancamentos l ON l.id = d.lancamento_id"
+            " WHERE d.execucao_que_aplicou = ? AND d.tipo = ? ORDER BY l.data, l.id, dt.titulo_id",
+            (execucao, TipoDeDecisao.CONFIRMAR.value),
+        ).fetchall()
+        for lancamento_id, titulo_id, encargo, *lancamento in linhas:
+            titulo = self._titulo(titulo_id)
+            yield BaixaManual(
+                item=_identificador_do_item(lancamento_id),
+                titulo=titulo,
+                principal_centavos=titulo.valor_centavos,
+                encargo_centavos=encargo,
+                credito=_lancamento(lancamento),
+            )
 
     def _data_de_referencia(self, execucao: int) -> DataDeReferencia:
         linhas = self._conexao.execute(
@@ -391,15 +568,16 @@ class Armazenamento:
 
     def _itens(self, execucao: int) -> Iterator[Item]:
         linhas = self._conexao.execute(
-            "SELECT i.id, i.lancamento_id, i.destino, i.explicacao, i.motivo, a.franqueado, a.canal,"
+            "SELECT i.id, i.lancamento_id, i.destino, i.explicacao, i.motivo, r.regra, a.franqueado, a.canal,"
             f" {_COLUNAS_LANCAMENTO} FROM itens i JOIN lancamentos l ON l.id = i.lancamento_id"
-            " LEFT JOIN itens_atribuicoes a ON a.item_id = i.id WHERE i.execucao_id = ?"
+            " LEFT JOIN itens_atribuicoes a ON a.item_id = i.id LEFT JOIN itens_regras r ON r.item_id = i.id"
+            " WHERE i.execucao_id = ?"
             " ORDER BY l.data, l.id",
             (execucao,),
         ).fetchall()
-        for item_id, lancamento_id, destino, explicacao, motivo, franqueado, canal, *lancamento in linhas:
+        for item_id, lancamento_id, destino, explicacao, motivo, regra, franqueado, canal, *lancamento in linhas:
             yield Item(
-                identificador=f"L{lancamento_id}",
+                identificador=_identificador_do_item(lancamento_id),
                 destino=Destino(destino),
                 lancamento=_lancamento(lancamento),
                 titulos=self._titulos_ligados("itens_titulos", item_id),
@@ -409,6 +587,7 @@ class Armazenamento:
                 pareceres=self._pareceres(item_id),
                 franqueado=franqueado,
                 canal=Canal(canal) if canal else None,
+                regra=RegraDaProposta(regra) if regra else None,
             )
 
     def _pareceres(self, item_id: int) -> tuple[ParecerSobreFranqueado, ...]:
@@ -426,10 +605,10 @@ class Armazenamento:
         linhas = self._conexao.execute("SELECT tipo FROM itens_evidencias WHERE item_id = ? ORDER BY rowid", (item_id,))
         return tuple(TipoDeEvidencia(tipo) for (tipo,) in linhas)
 
-    def _titulos_ligados(self, ligacao: str, item_id: int) -> tuple[Titulo, ...]:
+    def _titulos_ligados(self, ligacao: str, item_id: int, coluna: str = "item_id") -> tuple[Titulo, ...]:
         linhas = self._conexao.execute(
             f"SELECT {_COLUNAS_TITULO} FROM {ligacao} it JOIN titulos t ON t.id = it.titulo_id"
-            " WHERE it.item_id = ? ORDER BY t.id",
+            f" WHERE it.{coluna} = ? ORDER BY t.id",
             (item_id,),
         )
         return tuple(_titulo(linha) for linha in linhas)
@@ -451,6 +630,18 @@ def _titulo(linha: tuple[str, str, str, str, str | None, str, int]) -> Titulo:
         vencimento=date.fromisoformat(vencimento),
         valor_centavos=valor,
     )
+
+
+_PREFIXO_DO_ITEM = "L"
+
+
+def _identificador_do_item(lancamento_id: int) -> str:
+    return f"{_PREFIXO_DO_ITEM}{lancamento_id}"
+
+
+def _lancamento_do_item(identificador: str) -> int:
+    assert identificador.startswith(_PREFIXO_DO_ITEM)
+    return int(identificador.removeprefix(_PREFIXO_DO_ITEM))
 
 
 def _parametros_da_chave(chave: ChaveNatural) -> tuple[object, ...]:

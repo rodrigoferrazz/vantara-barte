@@ -5,6 +5,7 @@ from datetime import date
 
 from conciliacao.dominio import (
     Canal,
+    ChaveNatural,
     Classificacao,
     Destino,
     Franqueado,
@@ -12,6 +13,8 @@ from conciliacao.dominio import (
     MotivoDeNaoIdentificacao,
     Natureza,
     ParecerSobreFranqueado,
+    ParRejeitado,
+    RegraDaProposta,
     PossivelDuplicidade,
     Resposta,
     TipoDeEvidencia,
@@ -167,26 +170,57 @@ def conciliar(
     canal_do_credito: CanalDoCredito,
     limite_de_combinacoes: int,
     parecerista: PareceristaDeNome,
+    pares_rejeitados: Iterable[ParRejeitado] = (),
 ) -> list[Classificacao]:
     todos = list(titulos)
-    por_nosso_numero: dict[str, list[Titulo]] = defaultdict(list)
-    por_franqueado: dict[str, list[Titulo]] = defaultdict(list)
-    for titulo in todos:
-        if titulo.nosso_numero:
-            por_nosso_numero[titulo.nosso_numero].append(titulo)
-        por_franqueado[titulo.franqueado].append(titulo)
-    abertos = _Titulos(
-        todos,
-        por_nosso_numero,
-        por_franqueado,
-        _nomes_dos_franqueados(franqueados, todos),
-        encargo,
-        nome_do_pagador,
-        limite_de_combinacoes,
-        parecerista,
-    )
+    nomes = _nomes_dos_franqueados(franqueados, todos)
+
+    def abertos(titulos: list[Titulo]) -> _Titulos:
+        por_nosso_numero: dict[str, list[Titulo]] = defaultdict(list)
+        por_franqueado: dict[str, list[Titulo]] = defaultdict(list)
+        for titulo in titulos:
+            if titulo.nosso_numero:
+                por_nosso_numero[titulo.nosso_numero].append(titulo)
+            por_franqueado[titulo.franqueado].append(titulo)
+        return _Titulos(
+            titulos,
+            por_nosso_numero,
+            por_franqueado,
+            nomes,
+            encargo,
+            nome_do_pagador,
+            limite_de_combinacoes,
+            parecerista,
+        )
+
+    rejeitados: dict[ChaveNatural, list[ParRejeitado]] = defaultdict(list)
+    for par in pares_rejeitados:
+        rejeitados[par.credito].append(par)
+    todos_abertos = abertos(todos)
+
+    def classificar(lancamento: Lancamento) -> Classificacao:
+        pares = rejeitados.get(lancamento.chave_natural)
+        if not pares:
+            return _classificar(lancamento, todos_abertos)
+        restantes = [titulo for titulo in todos if not any(par.rejeita(titulo) for par in pares)]
+        return _apos_rejeicao(_classificar(lancamento, abertos(restantes)), pares)
+
     return _sem_titulo_disputado_na_lista(
-        [_com_canal(_classificar(lancamento, abertos), canal_do_credito) for lancamento in lancamentos]
+        [_com_canal(classificar(lancamento), canal_do_credito) for lancamento in lancamentos]
+    )
+
+
+def _apos_rejeicao(classificacao: Classificacao, pares: list[ParRejeitado]) -> Classificacao:
+    rejeicoes = "; ".join(f"Título {par.documento} ({par.sistema_de_origem}), motivo: {par.motivo}" for par in pares)
+    explicacao = f"{classificacao.explicacao} Proposta anterior rejeitada pela Analista: {rejeicoes}."
+    if classificacao.destino is not Destino.LISTA_DE_BAIXA:
+        return replace(classificacao, explicacao=explicacao)
+    return replace(
+        classificacao,
+        destino=Destino.FILA_DE_EXCECOES,
+        explicacao=explicacao,
+        motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+        regra=None,
     )
 
 
@@ -224,6 +258,7 @@ def _disputada(classificacao: Classificacao, na_lista: dict[Titulo, list[Lancame
         destino=Destino.FILA_DE_EXCECOES,
         explicacao=f"{classificacao.explicacao} Há Título desta proposta que também fecha com outro Crédito: {creditos}.",
         motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+        regra=None,
     )
 
 
@@ -563,6 +598,11 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
             titulos=tuple(titulo for titulo, _ in opcao.titulos),
             explicacao=f"{pagador}; o valor {valor} é Valor único entre os Títulos em aberto dele: {opcao.descrever()}.",
             franqueado=franqueado,
+            regra=(
+                RegraDaProposta.DOCUMENTO_E_VALOR_UNICO
+                if len(opcao.titulos) == 1
+                else RegraDaProposta.DOCUMENTO_E_SOMA_EXATA
+            ),
         )
     if busca.fecha:
         return fila(
@@ -610,6 +650,7 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
             explicacao=identificacao,
             evidencia=(TipoDeEvidencia.NOSSO_NUMERO,),
             franqueado=titulo.franqueado,
+            regra=RegraDaProposta.NOSSO_NUMERO_E_VALOR,
         )
     return Classificacao(
         lancamento=lancamento,
