@@ -99,6 +99,13 @@ class ExtratoItau:
     banco = "itau"
     cabecalho: tuple[str, ...] = ("data", "historico", "documento", "valor", "tipo")
     separador = ";"
+    historicos_com_nome_do_pagador: tuple[str, ...] = ("PIX RECEBIDO ", "TED RECEBIDA ")
+
+    def nome_do_pagador(self, historico: str) -> str | None:
+        for inicio in self.historicos_com_nome_do_pagador:
+            if historico.startswith(inicio) and historico[len(inicio) :].strip():
+                return historico[len(inicio) :].strip()
+        return None
 
     def ler(self, arquivo: Path, linhas: list[list[str]], configuracao: Configuracao) -> ConteudoDoArquivo:
         conta = _conta_do_extrato(arquivo, configuracao)
@@ -129,6 +136,11 @@ class ExtratoItau:
 
 EXTRATOS: tuple[ExtratoItau, ...] = (ExtratoItau(),)
 ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), OmieTitulos(), *EXTRATOS)
+
+
+def nome_do_pagador(lancamento: Lancamento) -> str | None:
+    extratos = [extrato for extrato in EXTRATOS if extrato.banco == lancamento.banco]
+    return extratos[0].nome_do_pagador(lancamento.historico) if extratos else None
 
 
 def ler_pasta(pasta: Path, configuracao: Configuracao) -> Leitura:

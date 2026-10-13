@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from datetime import date, datetime
 
 _VALOR_PTBR = re.compile(r"\d{1,3}(\.\d{3})*,\d{2}")
@@ -73,3 +74,8 @@ def raiz_do_cnpj(cnpj: str) -> str:
 
 def _so_digitos(texto: str) -> str:
     return re.sub(r"\D", "", texto)
+
+
+def nome_normalizado(texto: str) -> str:
+    sem_acento = "".join(c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^A-Z0-9]+", " ", sem_acento.upper()).split())

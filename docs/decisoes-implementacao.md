@@ -151,3 +151,34 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** os itens de Título aparecem na aba Fila de exceções depois dos Créditos, com Item, Motivo, Títulos sugeridos e Explicação preenchidos e as colunas do lançamento (inclusive Valor) vazias; valor e vencimento ficam na explicação. O Resumo ganha a linha "Itens de Título na Fila" e as linhas por destino continuam contando só lançamentos.
 - **Por quê:** a spec põe a Possível duplicidade na Fila; deixar Valor vazio faz a soma da coluna na aba continuar igual à soma dos Créditos da Fila.
 - **Alternativas:** aba própria para itens de Título; preencher Valor com o valor do Título.
+
+## Ticket 06: nome do pagador no histórico do Extrato
+
+- **Decisão:** cada adaptador de Extrato diz onde está o nome do pagador no histórico. No Itaú, o nome é o texto depois de "PIX RECEBIDO " ou "TED RECEBIDA "; qualquer outro histórico (depósito, liquidação de cobrança etc.) é tratado como Crédito sem nome. O nome só é procurado depois do nosso número e do CNPJ.
+- **Por quê:** o começo do histórico é parte do layout do banco, como o cabeçalho; tentar cada sufixo do histórico como nome acharia "nomes" de uma letra que são prefixo de muitos Franqueados.
+- **Alternativas:** testar todos os sufixos do histórico; lista de começos em configuração (o layout já mora no adaptador).
+
+## Ticket 06: normalização e comparação do Nome por prefixo
+
+- **Decisão:** nomes são normalizados em maiúsculas, sem acento, com todo caractere que não é letra ou dígito virando espaço e espaços repetidos colapsados ("Pão & Café Ltda." vira "PAO CAFE LTDA"). O prefixo é por caractere, não por palavra, porque o banco corta no meio da palavra. Os nomes comparados são todos os do Franqueado guardados em execuções anteriores mais os da exportação atual.
+- **Por quê:** é a normalização da spec; tratar símbolo como separador faz "&" e "/" sumirem dos dois lados igualmente.
+- **Alternativas:** trocar "&" por "E" (o banco da amostra simplesmente remove o símbolo); prefixo por palavra inteira.
+
+## Ticket 06: Motivo do Crédito identificado só por Nome por prefixo
+
+- **Decisão:** com os Franqueados cujo nome tem o nome do Extrato como prefixo: nenhum deles com Título em aberto vira "Crédito sem título em aberto"; nenhum Título deles fecha com o valor (considerando o Encargo) vira "valor não fecha", sugerindo o Título quando há um só entre todos; Títulos de mais de um Franqueado fecham vira "nome ambíguo", sem sugestão; mais de um Título do mesmo Franqueado fecha vira "mais de uma combinação possível", sem sugestão; um só Título fecha vira "pagador provável, primeira vez", com o Título sugerido, mesmo quando o nome era prefixo de mais de um Franqueado (o valor desempatou). Nunca vai para a Lista, porque ainda não existe Pagador conhecido.
+- **Por quê:** segue a precedência da spec (valor não fecha, Crédito sem título em aberto, nome ambíguo, pagador provável) e as decisões dos tickets 03 e 04 para o caso de CNPJ; "pagador provável" fica só para o item que está na Fila apenas por falta de confirmação do nome (história 40).
+- **Alternativas:** sugerir todos os Títulos no nome ambíguo (pareceria uma combinação); tratar o caso de vários Títulos do mesmo Franqueado como "pagador provável".
+- **Exemplo que sai da regra:** na amostra, o PIX de 30/07 (1.850,00) aparece como "Crédito sem título em aberto"; pela regra ele fica "valor não fecha", porque os dois Títulos do Franqueado continuam em aberto na exportação, ainda que um esteja proposto na Lista e o outro sugerido a outro Crédito da Fila. Reservar Títulos já propostos ou sugeridos a outro Crédito não faz parte deste ticket.
+
+## Ticket 06: Crédito que só bate por valor
+
+- **Decisão:** Crédito sem nosso número, CNPJ ou Nome por prefixo procura, entre todos os Títulos em aberto, os que fecham com o valor considerando o Encargo. Com um só, vai para a Fila como "sem identificação do pagador" sugerindo esse Título; com mais de um, mesmo Motivo sem sugestão, citando os Títulos na explicação; com nenhum, mesmo Motivo sem evidência. Nome que não é prefixo de nenhum Franqueado recebe o mesmo tratamento até o parecer da IA (ticket 08). Nosso número de vários Títulos e CNPJs de vários Franqueados continuam sem sugestão (tickets 01 e 03).
+- **Por quê:** a spec põe o depósito sem nome com o Título sugerido e "sem identificação do pagador"; com vários Títulos a plataforma não escolhe.
+- **Alternativas:** "mais de uma combinação possível" quando o valor aponta vários Títulos (o que falta é o pagador, não a escolha da combinação).
+
+## Ticket 06: evidência e o que falta
+
+- **Decisão:** cada item guarda a evidência como tipos de um conjunto aberto (por enquanto nosso número, CNPJ/CPF, nome por prefixo, só valor), numa tabela própria `itens_evidencias`; o detalhe continua na explicação. O que falta é derivado do Motivo, com um texto fixo por Motivo. A aba Fila de exceções ganha as colunas Evidência e O que falta, entre Títulos sugeridos e Explicação; itens de Título têm Evidência vazia.
+- **Por quê:** a spec trata a evidência como tipos para a fase 2 acrescentar "identificador de cobrança"; uma tabela nova é criada em bancos SQLite já existentes sem migração. O que falta depende só da causa, então guardar seria duplicar.
+- **Alternativas:** coluna de evidência na tabela `itens` (exigiria migração); texto livre de o que falta por item.

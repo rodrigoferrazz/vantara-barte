@@ -19,6 +19,7 @@ from conciliacao.dominio import (
     PossivelDuplicidade,
     Resultado,
     Resumo,
+    TipoDeEvidencia,
     Titulo,
     TotalDoDestino,
 )
@@ -65,6 +66,10 @@ CREATE TABLE IF NOT EXISTS itens (
     destino TEXT NOT NULL,
     explicacao TEXT NOT NULL,
     motivo TEXT
+);
+CREATE TABLE IF NOT EXISTS itens_evidencias (
+    item_id INTEGER NOT NULL REFERENCES itens(id),
+    tipo TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS itens_titulos (
     item_id INTEGER NOT NULL REFERENCES itens(id),
@@ -181,6 +186,10 @@ class Armazenamento:
                 ),
             ).lastrowid
             self._conexao.executemany(
+                "INSERT INTO itens_evidencias (item_id, tipo) VALUES (?, ?)",
+                [(item, tipo.value) for tipo in classificacao.evidencia],
+            )
+            self._conexao.executemany(
                 "INSERT INTO itens_titulos (item_id, titulo_id) VALUES (?, ?)",
                 [(item, id_do_titulo[titulo]) for titulo in classificacao.titulos],
             )
@@ -273,7 +282,12 @@ class Armazenamento:
                 titulos=self._titulos_ligados("itens_titulos", item_id),
                 explicacao=explicacao,
                 motivo=MotivoDeNaoIdentificacao(motivo) if motivo else None,
+                evidencia=self._evidencia(item_id),
             )
+
+    def _evidencia(self, item_id: int) -> tuple[TipoDeEvidencia, ...]:
+        linhas = self._conexao.execute("SELECT tipo FROM itens_evidencias WHERE item_id = ? ORDER BY rowid", (item_id,))
+        return tuple(TipoDeEvidencia(tipo) for (tipo,) in linhas)
 
     def _titulos_ligados(self, ligacao: str, item_id: int) -> tuple[Titulo, ...]:
         linhas = self._conexao.execute(

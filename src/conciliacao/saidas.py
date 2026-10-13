@@ -19,7 +19,9 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     _preencher_resumo(resumo, resultado)
     _aba_de_itens(workbook.create_sheet(Destino.LISTA_DE_BAIXA.value), resultado.lista_de_baixa, ("Títulos", "Explicação"))
     fila = workbook.create_sheet(Destino.FILA_DE_EXCECOES.value)
-    _aba_de_itens(fila, resultado.fila_de_excecoes, ("Motivo", "Títulos sugeridos", "Explicação"))
+    _aba_de_itens(
+        fila, resultado.fila_de_excecoes, ("Motivo", "Títulos sugeridos", "Evidência", "O que falta", "Explicação")
+    )
     _acrescentar_itens_de_titulo(fila, resultado.itens_de_titulo)
     _aba_de_itens(workbook.create_sheet(Destino.FORA_DO_ESCOPO.value), resultado.fora_do_escopo, ("Explicação",))
     _aba_de_arquivos_recusados(workbook.create_sheet("Arquivos recusados"), resultado.arquivos_recusados)
@@ -51,6 +53,8 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
             "Títulos": _titulos(item.titulos),
             "Títulos sugeridos": _titulos(item.titulos),
             "Motivo": item.motivo.value if item.motivo else "",
+            "Evidência": "; ".join(tipo.value for tipo in item.evidencia),
+            "O que falta": item.o_que_falta,
             "Explicação": item.explicacao,
         }
         aba.append(
@@ -73,7 +77,17 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
 def _acrescentar_itens_de_titulo(aba: Worksheet, itens: tuple[ItemDeTitulo, ...]) -> None:
     for item in itens:
         sem_lancamento = (None,) * 6
-        aba.append((item.identificador, *sem_lancamento, item.motivo.value, _titulos(item.titulos), item.explicacao))
+        aba.append(
+            (
+                item.identificador,
+                *sem_lancamento,
+                item.motivo.value,
+                _titulos(item.titulos),
+                None,
+                item.motivo.o_que_falta,
+                item.explicacao,
+            )
+        )
 
 
 def _aba_de_arquivos_recusados(aba: Worksheet, recusados: tuple[ArquivoRecusado, ...]) -> None:

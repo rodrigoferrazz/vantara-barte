@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] Nome truncado que é prefixo de um nome do Franqueado em qualquer sistema gera sugestão na Fila
-- [ ] Nome por prefixo nunca leva à Lista enquanto não houver Pagador conhecido confirmado
-- [ ] Nome que é prefixo de nomes de mais de um Franqueado e o valor não desempata vai como 'nome ambíguo'
-- [ ] Crédito sem nome nem documento que só bate por valor vai como 'sem identificação do pagador' com a sugestão
-- [ ] Cada item da Fila tem exatamente um Motivo, seguindo a precedência
-- [ ] Itens da Fila mostram Título sugerido, evidência encontrada e o que falta
+- [x] Nome truncado que é prefixo de um nome do Franqueado em qualquer sistema gera sugestão na Fila
+- [x] Nome por prefixo nunca leva à Lista enquanto não houver Pagador conhecido confirmado
+- [x] Nome que é prefixo de nomes de mais de um Franqueado e o valor não desempata vai como 'nome ambíguo'
+- [x] Crédito sem nome nem documento que só bate por valor vai como 'sem identificação do pagador' com a sugestão
+- [x] Cada item da Fila tem exatamente um Motivo, seguindo a precedência
+- [x] Itens da Fila mostram Título sugerido, evidência encontrada e o que falta
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

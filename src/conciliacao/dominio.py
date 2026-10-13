@@ -26,6 +26,35 @@ class MotivoDeNaoIdentificacao(StrEnum):
     POSSIVEL_FONTE_NAO_INTEGRADA = "Possível fonte não integrada"
     PAGADOR_PROVAVEL_PRIMEIRA_VEZ = "pagador provável, primeira vez"
 
+    @property
+    def o_que_falta(self) -> str:
+        return _O_QUE_FALTA[self]
+
+
+_O_QUE_FALTA = {
+    MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR: "identificar o pagador do Crédito",
+    MotivoDeNaoIdentificacao.NOME_AMBIGUO: "decidir de qual Franqueado é o Crédito",
+    MotivoDeNaoIdentificacao.VALOR_NAO_FECHA: (
+        "explicar a diferença entre o Crédito e o valor do Título (desconto, retenção, pagamento parcial ou Valor a maior)"
+    ),
+    MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO: (
+        "Título em aberto do Franqueado para o Crédito; ele é retentado a cada nova importação"
+    ),
+    MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO: "escolher entre os Títulos que fecham o valor",
+    MotivoDeNaoIdentificacao.POSSIVEL_DUPLICIDADE: "decidir se os Títulos são a mesma dívida",
+    MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA: "Título no Sistema de origem fora da plataforma",
+    MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ: (
+        "confirmar que o pagador é o Franqueado; o nome do Extrato ainda não é Pagador conhecido"
+    ),
+}
+
+
+class TipoDeEvidencia(StrEnum):
+    NOSSO_NUMERO = "nosso número"
+    CNPJ_CPF = "CNPJ/CPF"
+    NOME_POR_PREFIXO = "nome por prefixo"
+    SO_VALOR = "só valor"
+
 
 @dataclass(frozen=True)
 class Titulo:
@@ -93,6 +122,7 @@ class Classificacao:
     titulos: tuple[Titulo, ...]
     explicacao: str
     motivo: MotivoDeNaoIdentificacao | None = None
+    evidencia: tuple[TipoDeEvidencia, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,6 +133,11 @@ class Item:
     titulos: tuple[Titulo, ...]
     explicacao: str
     motivo: MotivoDeNaoIdentificacao | None
+    evidencia: tuple[TipoDeEvidencia, ...]
+
+    @property
+    def o_que_falta(self) -> str:
+        return self.motivo.o_que_falta if self.motivo else ""
 
 
 @dataclass(frozen=True)
