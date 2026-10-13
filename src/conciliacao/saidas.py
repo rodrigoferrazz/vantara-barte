@@ -7,7 +7,9 @@ from openpyxl.worksheet.worksheet import Worksheet
 from conciliacao.calendario import vencimento_efetivo
 from conciliacao.dominio import (
     ArquivoRecusado,
+    CausaRaiz,
     Destino,
+    GrupoDaCausaRaiz,
     Item,
     ItemDeTitulo,
     Resultado,
@@ -19,6 +21,7 @@ from conciliacao.normalizacao import formatar_reais
 
 _FORMATO_DE_VALOR = "#,##0.00"
 _FORMATO_DE_DATA = "DD/MM/YYYY"
+_FORMATO_DE_PERCENTUAL = "0.0%"
 
 
 def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
@@ -36,6 +39,7 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     )
     _acrescentar_itens_de_titulo(fila, resultado.itens_de_titulo)
     _aba_de_cobranca(workbook.create_sheet("Lista de cobrança"), resultado)
+    _aba_de_causa_raiz(workbook.create_sheet("Causa raiz"), resultado.causa_raiz)
     _aba_de_itens(workbook.create_sheet(Destino.FORA_DO_ESCOPO.value), resultado.fora_do_escopo, ("Explicação",))
     _aba_de_arquivos_recusados(workbook.create_sheet("Arquivos recusados"), resultado.arquivos_recusados)
     workbook.save(caminho)
@@ -185,6 +189,37 @@ def _linha_da_cobranca(aba: Worksheet, na_cobranca: TituloNaCobranca, *extras: s
         aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_DATA
     for coluna in (7, 8):
         aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_VALOR
+
+
+def _aba_de_causa_raiz(aba: Worksheet, causa_raiz: CausaRaiz) -> None:
+    agregacoes = {
+        "Por Motivo de não identificação": causa_raiz.por_motivo,
+        "Por Franqueado": causa_raiz.por_franqueado,
+        "Por banco": causa_raiz.por_banco,
+        "Por canal": causa_raiz.por_canal,
+    }
+    total = GrupoDaCausaRaiz("Total", causa_raiz.quantidade, causa_raiz.valor_centavos)
+    for titulo, grupos in agregacoes.items():
+        if aba.max_row > 1:
+            aba.append(())
+        aba.append((titulo,))
+        aba.append(("Grupo", "Quantidade", "% quantidade", "Valor", "% valor"))
+        for grupo in (*grupos, total):
+            fracao_da_quantidade = causa_raiz.fracao_da_quantidade(grupo)
+            fracao_do_valor = causa_raiz.fracao_do_valor(grupo)
+            aba.append(
+                (
+                    grupo.nome,
+                    grupo.quantidade,
+                    float(fracao_da_quantidade) if fracao_da_quantidade is not None else None,
+                    Decimal(grupo.valor_centavos) / 100,
+                    float(fracao_do_valor) if fracao_do_valor is not None else None,
+                )
+            )
+            aba.cell(row=aba.max_row, column=3).number_format = _FORMATO_DE_PERCENTUAL
+            aba.cell(row=aba.max_row, column=4).number_format = _FORMATO_DE_VALOR
+            aba.cell(row=aba.max_row, column=5).number_format = _FORMATO_DE_PERCENTUAL
+    aba.column_dimensions["A"].width = 50
 
 
 def _aba_de_arquivos_recusados(aba: Worksheet, recusados: tuple[ArquivoRecusado, ...]) -> None:

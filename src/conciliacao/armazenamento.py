@@ -7,6 +7,8 @@ from pathlib import Path
 
 from conciliacao.dominio import (
     ArquivoRecusado,
+    Canal,
+    CausaRaiz,
     ChaveNatural,
     Classificacao,
     DataDeReferencia,
@@ -84,6 +86,11 @@ CREATE TABLE IF NOT EXISTS itens_pareceres (
     explicacao TEXT NOT NULL,
     modelo TEXT NOT NULL,
     versao_do_prompt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS itens_atribuicoes (
+    item_id INTEGER NOT NULL UNIQUE REFERENCES itens(id),
+    franqueado TEXT,
+    canal TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS itens_titulos (
     item_id INTEGER NOT NULL REFERENCES itens(id),
@@ -243,6 +250,11 @@ class Armazenamento:
                     for p in classificacao.pareceres
                 ],
             )
+            if classificacao.canal is not None:
+                self._conexao.execute(
+                    "INSERT INTO itens_atribuicoes (item_id, franqueado, canal) VALUES (?, ?, ?)",
+                    (item, classificacao.franqueado, classificacao.canal.value),
+                )
             self._conexao.executemany(
                 "INSERT INTO itens_titulos (item_id, titulo_id) VALUES (?, ?)",
                 [(item, id_do_titulo[titulo]) for titulo in classificacao.titulos],
@@ -330,6 +342,10 @@ class Armazenamento:
             itens=itens,
             itens_de_titulo=tuple(self._itens_de_titulo(execucao)),
             cobranca=tuple(self._cobranca(execucao)),
+            causa_raiz=CausaRaiz.da_fila(
+                (item for item in itens if item.destino is Destino.FILA_DE_EXCECOES),
+                {raiz: franqueado.todos_os_nomes for raiz, franqueado in self.franqueados().items()},
+            ),
         )
 
     def _data_de_referencia(self, execucao: int) -> DataDeReferencia:
@@ -375,12 +391,13 @@ class Armazenamento:
 
     def _itens(self, execucao: int) -> Iterator[Item]:
         linhas = self._conexao.execute(
-            f"SELECT i.id, i.lancamento_id, i.destino, i.explicacao, i.motivo, {_COLUNAS_LANCAMENTO}"
-            " FROM itens i JOIN lancamentos l ON l.id = i.lancamento_id WHERE i.execucao_id = ?"
+            "SELECT i.id, i.lancamento_id, i.destino, i.explicacao, i.motivo, a.franqueado, a.canal,"
+            f" {_COLUNAS_LANCAMENTO} FROM itens i JOIN lancamentos l ON l.id = i.lancamento_id"
+            " LEFT JOIN itens_atribuicoes a ON a.item_id = i.id WHERE i.execucao_id = ?"
             " ORDER BY l.data, l.id",
             (execucao,),
         ).fetchall()
-        for item_id, lancamento_id, destino, explicacao, motivo, *lancamento in linhas:
+        for item_id, lancamento_id, destino, explicacao, motivo, franqueado, canal, *lancamento in linhas:
             yield Item(
                 identificador=f"L{lancamento_id}",
                 destino=Destino(destino),
@@ -390,6 +407,8 @@ class Armazenamento:
                 motivo=MotivoDeNaoIdentificacao(motivo) if motivo else None,
                 evidencia=self._evidencia(item_id),
                 pareceres=self._pareceres(item_id),
+                franqueado=franqueado,
+                canal=Canal(canal) if canal else None,
             )
 
     def _pareceres(self, item_id: int) -> tuple[ParecerSobreFranqueado, ...]:

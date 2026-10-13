@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from conciliacao.adaptadores import ler_pasta, nome_do_pagador
+from conciliacao.adaptadores import canal_do_credito, ler_pasta, nome_do_pagador
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
@@ -26,6 +26,7 @@ def executar_conciliacao(
             armazenamento.franqueados().values(),
             configuracao.encargo,
             nome_do_pagador,
+            canal_do_credito,
             configuracao.limite_de_combinacoes,
             parecerista,
         )

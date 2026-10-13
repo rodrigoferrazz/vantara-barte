@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
-from conciliacao.dominio import ArquivoRecusado, ChaveNatural, Lancamento, Natureza, Titulo
+from conciliacao.dominio import ArquivoRecusado, Canal, ChaveNatural, Lancamento, Natureza, Titulo
 from conciliacao.normalizacao import (
     FormatoInvalido,
     centavos_de_valor_com_ponto,
@@ -100,6 +100,18 @@ class ExtratoItau:
     cabecalho: tuple[str, ...] = ("data", "historico", "documento", "valor", "tipo")
     separador = ";"
     historicos_com_nome_do_pagador: tuple[str, ...] = ("PIX RECEBIDO ", "TED RECEBIDA ")
+    canais_pelo_inicio_do_historico: tuple[tuple[str, Canal], ...] = (
+        ("PIX RECEBIDO", Canal.PIX),
+        ("TED RECEBIDA", Canal.TED),
+        ("LIQUIDACAO COBRANCA", Canal.BOLETO),
+        ("DEPOSITO", Canal.DEPOSITO),
+    )
+
+    def canal(self, historico: str) -> Canal:
+        return next(
+            (canal for inicio, canal in self.canais_pelo_inicio_do_historico if historico.startswith(inicio)),
+            Canal.NAO_IDENTIFICADO,
+        )
 
     def nome_do_pagador(self, historico: str) -> str | None:
         for inicio in self.historicos_com_nome_do_pagador:
@@ -141,6 +153,11 @@ ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), OmieTitulos(), *
 def nome_do_pagador(lancamento: Lancamento) -> str | None:
     extratos = [extrato for extrato in EXTRATOS if extrato.banco == lancamento.banco]
     return extratos[0].nome_do_pagador(lancamento.historico) if extratos else None
+
+
+def canal_do_credito(lancamento: Lancamento) -> Canal:
+    extratos = [extrato for extrato in EXTRATOS if extrato.banco == lancamento.banco]
+    return extratos[0].canal(lancamento.historico) if extratos else Canal.NAO_IDENTIFICADO
 
 
 def ler_pasta(pasta: Path, configuracao: Configuracao) -> Leitura:

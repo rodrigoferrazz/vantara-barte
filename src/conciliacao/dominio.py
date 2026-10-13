@@ -1,6 +1,9 @@
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
+from fractions import Fraction
+from typing import ClassVar
 
 from conciliacao.normalizacao import raiz_do_cnpj
 
@@ -47,6 +50,14 @@ _O_QUE_FALTA = {
         "confirmar que o pagador é o Franqueado; o nome do Extrato ainda não é Pagador conhecido"
     ),
 }
+
+
+class Canal(StrEnum):
+    PIX = "Pix"
+    TED = "TED"
+    BOLETO = "boleto"
+    DEPOSITO = "depósito"
+    NAO_IDENTIFICADO = "canal não identificado"
 
 
 class TipoDeEvidencia(StrEnum):
@@ -153,6 +164,8 @@ class Classificacao:
     evidencia: tuple[TipoDeEvidencia, ...] = ()
     pareceres: tuple[ParecerSobreFranqueado, ...] = ()
     citados: tuple[Titulo, ...] = ()
+    franqueado: str | None = None
+    canal: Canal | None = None
 
     @property
     def titulos_candidatos(self) -> tuple[Titulo, ...]:
@@ -169,6 +182,8 @@ class Item:
     motivo: MotivoDeNaoIdentificacao | None
     evidencia: tuple[TipoDeEvidencia, ...]
     pareceres: tuple[ParecerSobreFranqueado, ...]
+    franqueado: str | None = None
+    canal: Canal | None = None
 
     @property
     def o_que_falta(self) -> str:
@@ -249,11 +264,74 @@ class Resumo:
 
 
 @dataclass(frozen=True)
+class GrupoDaCausaRaiz:
+    nome: str
+    quantidade: int
+    valor_centavos: int
+
+
+@dataclass(frozen=True)
+class CausaRaiz:
+    SEM_FRANQUEADO: ClassVar[str] = "sem Franqueado"
+
+    quantidade: int
+    valor_centavos: int
+    por_motivo: tuple[GrupoDaCausaRaiz, ...]
+    por_franqueado: tuple[GrupoDaCausaRaiz, ...]
+    por_banco: tuple[GrupoDaCausaRaiz, ...]
+    por_canal: tuple[GrupoDaCausaRaiz, ...]
+
+    @classmethod
+    def da_fila(cls, fila: Iterable[Item], nomes_dos_franqueados: Mapping[str, Iterable[str]]) -> "CausaRaiz":
+        creditos = list(fila)
+
+        def franqueado(item: Item) -> str:
+            if item.franqueado is None:
+                return cls.SEM_FRANQUEADO
+            nomes = sorted(nomes_dos_franqueados.get(item.franqueado, ()))
+            return f"{' / '.join(nomes)} (raiz {item.franqueado})" if nomes else f"raiz {item.franqueado}"
+
+        por_franqueado = _agrupar(creditos, franqueado)
+        return cls(
+            quantidade=len(creditos),
+            valor_centavos=sum(item.lancamento.valor_centavos for item in creditos),
+            por_motivo=_agrupar(creditos, lambda item: str(item.motivo), [m.value for m in MotivoDeNaoIdentificacao]),
+            por_franqueado=_por_concentracao([g for g in por_franqueado if g.nome != cls.SEM_FRANQUEADO])
+            + tuple(g for g in por_franqueado if g.nome == cls.SEM_FRANQUEADO),
+            por_banco=_por_concentracao(_agrupar(creditos, lambda item: item.lancamento.banco)),
+            por_canal=_agrupar(creditos, lambda item: str(item.canal), [c.value for c in Canal]),
+        )
+
+    def fracao_da_quantidade(self, grupo: GrupoDaCausaRaiz) -> Fraction | None:
+        return Fraction(grupo.quantidade, self.quantidade) if self.quantidade else None
+
+    def fracao_do_valor(self, grupo: GrupoDaCausaRaiz) -> Fraction | None:
+        return Fraction(grupo.valor_centavos, self.valor_centavos) if self.valor_centavos else None
+
+
+def _agrupar(
+    itens: list[Item], grupo_do_item: Callable[[Item], str], grupos_fixos: Iterable[str] = ()
+) -> tuple[GrupoDaCausaRaiz, ...]:
+    grupos: dict[str, list[Item]] = {nome: [] for nome in grupos_fixos}
+    for item in itens:
+        grupos.setdefault(grupo_do_item(item), []).append(item)
+    return tuple(
+        GrupoDaCausaRaiz(nome, len(do_grupo), sum(item.lancamento.valor_centavos for item in do_grupo))
+        for nome, do_grupo in grupos.items()
+    )
+
+
+def _por_concentracao(grupos: Iterable[GrupoDaCausaRaiz]) -> tuple[GrupoDaCausaRaiz, ...]:
+    return tuple(sorted(grupos, key=lambda grupo: (-grupo.quantidade, -grupo.valor_centavos, grupo.nome)))
+
+
+@dataclass(frozen=True)
 class Resultado:
     resumo: Resumo
     itens: tuple[Item, ...]
     itens_de_titulo: tuple[ItemDeTitulo, ...]
     cobranca: tuple[TituloNaCobranca, ...]
+    causa_raiz: CausaRaiz
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]

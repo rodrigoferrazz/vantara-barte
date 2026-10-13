@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 
 from conciliacao.dominio import (
+    Canal,
     Classificacao,
     Destino,
     Franqueado,
@@ -23,6 +24,7 @@ from conciliacao.normalizacao import cnpjs_no_texto, formatar_reais, nome_normal
 from conciliacao.parecerista import PareceristaDeNome
 
 type NomeDoPagador = Callable[[Lancamento], str | None]
+type CanalDoCredito = Callable[[Lancamento], Canal]
 
 _DIAS_UTEIS_DE_COMPENSACAO_DO_BOLETO = 2
 
@@ -162,6 +164,7 @@ def conciliar(
     franqueados: Iterable[Franqueado],
     encargo: ParametrosDeEncargo,
     nome_do_pagador: NomeDoPagador,
+    canal_do_credito: CanalDoCredito,
     limite_de_combinacoes: int,
     parecerista: PareceristaDeNome,
 ) -> list[Classificacao]:
@@ -182,7 +185,16 @@ def conciliar(
         limite_de_combinacoes,
         parecerista,
     )
-    return _sem_titulo_disputado_na_lista([_classificar(lancamento, abertos) for lancamento in lancamentos])
+    return _sem_titulo_disputado_na_lista(
+        [_com_canal(_classificar(lancamento, abertos), canal_do_credito) for lancamento in lancamentos]
+    )
+
+
+def _com_canal(classificacao: Classificacao, canal_do_credito: CanalDoCredito) -> Classificacao:
+    lancamento = classificacao.lancamento
+    if lancamento.natureza is Natureza.DEBITO:
+        return classificacao
+    return replace(classificacao, canal=canal_do_credito(lancamento))
 
 
 def _sem_titulo_disputado_na_lista(classificacoes: list[Classificacao]) -> list[Classificacao]:
@@ -292,6 +304,7 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
             f"{_documentos(candidatos)}.",
             (TipoDeEvidencia.NOSSO_NUMERO,),
             citados=tuple(candidatos),
+            franqueado=_unico({titulo.franqueado for titulo in candidatos}),
         )
     documentos = [c for c in cnpjs_no_texto(lancamento.historico) if raiz_do_cnpj(c) in abertos.franqueados]
     raizes = {raiz_do_cnpj(c) for c in documentos}
@@ -320,6 +333,7 @@ def _sem_identificacao(
     evidencia: tuple[TipoDeEvidencia, ...],
     titulos: tuple[Titulo, ...] = (),
     citados: tuple[Titulo, ...] = (),
+    franqueado: str | None = None,
 ) -> Classificacao:
     return Classificacao(
         lancamento=lancamento,
@@ -329,7 +343,12 @@ def _sem_identificacao(
         motivo=MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
         evidencia=evidencia,
         citados=citados,
+        franqueado=franqueado,
     )
+
+
+def _unico(franqueados: set[str]) -> str | None:
+    return next(iter(franqueados)) if len(franqueados) == 1 else None
 
 
 def _por_nome(
@@ -343,6 +362,7 @@ def _por_nome(
     buscas = {
         raiz: busca for raiz in franqueados if (busca := abertos.buscar(abertos.por_franqueado.get(raiz, []), lancamento)).fecha
     }
+    franqueado = _unico(set(franqueados)) or _unico(set(buscas))
 
     def fila(
         motivo: MotivoDeNaoIdentificacao,
@@ -358,6 +378,7 @@ def _por_nome(
             motivo=motivo,
             evidencia=(TipoDeEvidencia.NOME_POR_PREFIXO,),
             citados=citados,
+            franqueado=franqueado,
         )
 
     if not titulos:
@@ -430,6 +451,7 @@ def _por_parecer(lancamento: Lancamento, nome: str, abertos: _Titulos) -> Classi
             evidencia=(evidencia,),
             pareceres=pareceres,
             citados=citados,
+            franqueado=None if Resposta.INDISPONIVEL in respostas else _unico(set(confirmados)),
         )
 
     respostas = {p.parecer.resposta for p in pareceres}
@@ -510,7 +532,8 @@ def _so_valor(lancamento: Lancamento, nome: str | None, abertos: _Titulos) -> Cl
 
 def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo], abertos: _Titulos) -> Classificacao:
     valor = formatar_reais(lancamento.valor_centavos)
-    pagador = f"CNPJ {documento} no histórico identifica o Franqueado de raiz {raiz_do_cnpj(documento)}"
+    franqueado = raiz_do_cnpj(documento)
+    pagador = f"CNPJ {documento} no histórico identifica o Franqueado de raiz {franqueado}"
 
     def fila(
         motivo: MotivoDeNaoIdentificacao,
@@ -526,6 +549,7 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
             explicacao=explicacao,
             motivo=motivo,
             citados=citados,
+            franqueado=franqueado,
         )
 
     if not titulos:
@@ -538,6 +562,7 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
             destino=Destino.LISTA_DE_BAIXA,
             titulos=tuple(titulo for titulo, _ in opcao.titulos),
             explicacao=f"{pagador}; o valor {valor} é Valor único entre os Títulos em aberto dele: {opcao.descrever()}.",
+            franqueado=franqueado,
         )
     if busca.fecha:
         return fila(
@@ -584,6 +609,7 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
             titulos=(titulo,),
             explicacao=identificacao,
             evidencia=(TipoDeEvidencia.NOSSO_NUMERO,),
+            franqueado=titulo.franqueado,
         )
     return Classificacao(
         lancamento=lancamento,
@@ -592,4 +618,5 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
         explicacao=identificacao,
         motivo=MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
         evidencia=(TipoDeEvidencia.NOSSO_NUMERO,),
+        franqueado=titulo.franqueado,
     )
