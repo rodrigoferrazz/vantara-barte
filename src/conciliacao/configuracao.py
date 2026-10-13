@@ -21,6 +21,7 @@ class ContaDeExtrato:
 class Configuracao:
     contas: tuple[ContaDeExtrato, ...]
     encargo: ParametrosDeEncargo = ParametrosDeEncargo()
+    limite_de_combinacoes: int = 100_000
 
 
 def carregar_configuracao(caminho: Path) -> Configuracao:
@@ -33,7 +34,9 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
     if not isinstance(contas, list) or not contas:
         raise ConfiguracaoInvalida(f"{caminho}: faltam as [[contas]] com padrao, banco e conta")
     return Configuracao(
-        contas=tuple(_conta(caminho, conta) for conta in contas), encargo=_encargo(caminho, dados.get("encargo", {}))
+        contas=tuple(_conta(caminho, conta) for conta in contas),
+        encargo=_encargo(caminho, dados.get("encargo", {})),
+        limite_de_combinacoes=_limite_de_combinacoes(caminho, dados.get("somas", {})),
     )
 
 
@@ -42,6 +45,18 @@ def _conta(caminho: Path, conta: object) -> ContaDeExtrato:
     if not isinstance(conta, dict) or not all(isinstance(conta.get(c), str) and conta[c] for c in campos):
         raise ConfiguracaoInvalida(f"{caminho}: cada [[contas]] precisa de padrao, banco e conta como texto")
     return ContaDeExtrato(padrao=conta["padrao"], banco=conta["banco"], conta=conta["conta"])
+
+
+def _limite_de_combinacoes(caminho: Path, somas: object) -> int:
+    if not isinstance(somas, dict):
+        raise ConfiguracaoInvalida(f"{caminho}: [somas] precisa ser uma seção")
+    desconhecidos = sorted(set(somas) - {"limite_de_combinacoes"})
+    if desconhecidos:
+        raise ConfiguracaoInvalida(f"{caminho}: [somas] não conhece {', '.join(desconhecidos)}; use limite_de_combinacoes")
+    limite = somas.get("limite_de_combinacoes", Configuracao.limite_de_combinacoes)
+    if isinstance(limite, bool) or not isinstance(limite, int) or limite < 1:
+        raise ConfiguracaoInvalida(f"{caminho}: [somas] limite_de_combinacoes precisa ser um número inteiro maior que zero")
+    return limite
 
 
 _CAMPOS_DE_ENCARGO = ("multa_percentual", "juros_ao_mes_percentual", "tolerancia_reais")

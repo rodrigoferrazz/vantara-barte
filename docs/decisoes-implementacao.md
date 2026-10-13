@@ -182,3 +182,34 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** cada item guarda a evidência como tipos de um conjunto aberto (por enquanto nosso número, CNPJ/CPF, nome por prefixo, só valor), numa tabela própria `itens_evidencias`; o detalhe continua na explicação. O que falta é derivado do Motivo, com um texto fixo por Motivo. A aba Fila de exceções ganha as colunas Evidência e O que falta, entre Títulos sugeridos e Explicação; itens de Título têm Evidência vazia.
 - **Por quê:** a spec trata a evidência como tipos para a fase 2 acrescentar "identificador de cobrança"; uma tabela nova é criada em bancos SQLite já existentes sem migração. O que falta depende só da causa, então guardar seria duplicar.
 - **Alternativas:** coluna de evidência na tabela `itens` (exigiria migração); texto livre de o que falta por item.
+
+## Ticket 07: soma exata sem Encargo
+
+- **Decisão:** uma combinação de dois ou mais Títulos fecha só quando o Crédito é igual à soma dos valores dos Títulos. Encargo (pago ou dentro da tolerância) só é considerado para um Título sozinho. Título atrasado dentro de uma combinação que fecha é Encargo não pago, registrado na explicação.
+- **Por quê:** a spec fala em "soma exata"; aceitar Encargo em combinação transformaria cada soma numa faixa, multiplicando as combinações que fecham e as chances de a plataforma decidir algo que a Analista deveria ver. Uma soma com Encargo pago vai para a Fila como "valor não fecha".
+- **Alternativas:** somar o Encargo previsto de cada Título atrasado à faixa da combinação.
+
+## Ticket 07: Valor único conta Título sozinho e combinações juntos
+
+- **Decisão:** as opções de um Crédito são os Títulos que fecham sozinhos (considerando o Encargo) mais as combinações de dois ou mais Títulos com soma exata, todas do mesmo Franqueado. Uma única opção é Valor único; duas ou mais vão para a Fila como "mais de uma combinação possível", sem sugestão, citando na explicação as opções encontradas. A busca para ao achar a segunda opção.
+- **Por quê:** o CONTEXT define Valor único como um só Título ou uma só combinação; um Título que fecha sozinho e uma soma que também fecha são opções igualmente válidas.
+- **Alternativas:** preferir o Título sozinho à soma (seria escolher entre opções válidas); listar todas as combinações (custo sem limite).
+
+## Ticket 07: limite da busca de somas
+
+- **Decisão:** o limite conta as combinações examinadas na busca de somas, por Crédito e por Franqueado, em `[somas] limite_de_combinacoes` do `conciliacao.toml` (padrão 100.000; inteiro maior que zero, campo desconhecido recusa a configuração). Atingido o limite, o Crédito vai para a Fila como "mais de uma combinação possível", mesmo que já tenha achado uma opção. Na identificação por Nome por prefixo, Franqueado com limite atingido conta como Franqueado com que o valor fecha, para decidir entre "nome ambíguo" e os outros Motivos.
+- **Por quê:** a spec manda o limite explícito e o destino quando atingido; sem terminar a busca não há como garantir que a opção encontrada é única. 100.000 combinações custam décimos de segundo por Crédito e cobrem com folga Franqueados com dezenas de Títulos em aberto.
+- **Alternativas:** limitar o tamanho da combinação ou o número de Títulos por Franqueado (não mede o custo real da busca); limite por execução inteira (um Franqueado grande consumiria o limite dos outros).
+
+## Ticket 07: Título proposto na Lista para mais de um Crédito
+
+- **Decisão:** depois de classificar todos os Créditos, os que iriam para a Lista propondo um Título que outro Crédito da Lista também propõe vão todos para a Fila como "mais de uma combinação possível", mantendo os Títulos como sugestão e citando os outros Créditos na explicação.
+- **Por quê:** é o único caminho por onde vários Créditos para vários Títulos (N:M) ou para o mesmo Título chegariam à Lista; a Lista nunca pode levar a baixar o mesmo Título duas vezes. O Motivo mais próximo da lista fixa é o de escolha entre combinações.
+- **Alternativas:** manter na Lista só o primeiro Crédito (seria escolher); reservar também Títulos sugeridos na Fila (fora do escopo, ver ticket 06).
+
+## Ticket 07: Crédito sem pagador identificado não procura somas
+
+- **Decisão:** a busca de somas só acontece para o Franqueado identificado por CNPJ ou por Nome por prefixo. Crédito que só bate por valor continua procurando apenas Títulos sozinhos, entre todos os em aberto.
+- **Por quê:** a spec restringe a soma ao mesmo Franqueado; sem pagador não há Franqueado, e somar Títulos de todos os Franqueados é o que a spec pede para evitar. O filtro por valor antes do parecer da LLM (ticket 08) pode reutilizar a busca por Franqueado candidato.
+- **Alternativas:** procurar somas em cada Franqueado para Créditos só por valor.
+- **Exemplo que sai da regra por enquanto:** na amostra, o TED de 14/07 (47.630,50, nome que não é prefixo) aparece com a sugestão de NF 104533 + NF 104588; hoje fica sem sugestão, como "sem identificação do pagador", até o ticket 08 aplicar o filtro por valor com somas ao Franqueado candidato da LLM.

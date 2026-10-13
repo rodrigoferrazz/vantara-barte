@@ -23,6 +23,7 @@ def executar_conciliacao(pasta: Path, armazenamento: Armazenamento, configuracao
             armazenamento.franqueados().values(),
             configuracao.encargo,
             nome_do_pagador,
+            configuracao.limite_de_combinacoes,
         )
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}

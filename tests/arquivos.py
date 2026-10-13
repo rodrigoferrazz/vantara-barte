@@ -79,6 +79,13 @@ def escrever_extrato_itau(pasta: Path, linhas: list[LinhaItau], nome: str = "ita
 
 
 def configuracao_itau(
-    padrao: str = "itau_cobranca*.csv", conta: str = "1234-5", encargo: ParametrosDeEncargo = ParametrosDeEncargo()
+    padrao: str = "itau_cobranca*.csv",
+    conta: str = "1234-5",
+    encargo: ParametrosDeEncargo = ParametrosDeEncargo(),
+    limite_de_combinacoes: int = Configuracao.limite_de_combinacoes,
 ) -> Configuracao:
-    return Configuracao(contas=(ContaDeExtrato(padrao=padrao, banco="itau", conta=conta),), encargo=encargo)
+    return Configuracao(
+        contas=(ContaDeExtrato(padrao=padrao, banco="itau", conta=conta),),
+        encargo=encargo,
+        limite_de_combinacoes=limite_de_combinacoes,
+    )

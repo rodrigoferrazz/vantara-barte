@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] Soma exata e única com pagador identificado por documento vai para a Lista com a soma na explicação
-- [ ] Soma exata e única com nome não confirmado vai para a Fila como 'pagador provável, primeira vez' com a combinação sugerida
-- [ ] Duas ou mais combinações que fecham o valor vão para a Fila como 'mais de uma combinação possível'
-- [ ] A busca considera só Títulos do mesmo Franqueado e tem limite configurável; atingido o limite, vai para a Fila como 'mais de uma combinação possível'
-- [ ] Crédito que paga parte de um Título vai para a Fila como 'valor não fecha'
-- [ ] Vários Créditos para vários Títulos nunca vão para a Lista
+- [x] Soma exata e única com pagador identificado por documento vai para a Lista com a soma na explicação
+- [x] Soma exata e única com nome não confirmado vai para a Fila como 'pagador provável, primeira vez' com a combinação sugerida
+- [x] Duas ou mais combinações que fecham o valor vão para a Fila como 'mais de uma combinação possível'
+- [x] A busca considera só Títulos do mesmo Franqueado e tem limite configurável; atingido o limite, vai para a Fila como 'mais de uma combinação possível'
+- [x] Crédito que paga parte de um Título vai para a Fila como 'valor não fecha'
+- [x] Vários Créditos para vários Títulos nunca vão para a Lista
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

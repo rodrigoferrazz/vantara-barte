@@ -1,6 +1,6 @@
 from collections import defaultdict
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from conciliacao.dominio import (
@@ -29,6 +29,48 @@ class _NomeDoFranqueado:
 
 
 @dataclass(frozen=True)
+class _Opcao:
+    titulos: tuple[tuple[Titulo, Pagamento], ...]
+
+    def descrever(self) -> str:
+        if len(self.titulos) == 1:
+            [(titulo, pagamento)] = self.titulos
+            return f"Título {titulo.documento} ({titulo.sistema_de_origem}), {pagamento.descrever()}"
+        parcelas = " + ".join(
+            f"{titulo.documento} ({titulo.sistema_de_origem}, {formatar_reais(titulo.valor_centavos)})"
+            for titulo, _ in self.titulos
+        )
+        soma = formatar_reais(sum(titulo.valor_centavos for titulo, _ in self.titulos))
+        pagamentos = "; ".join(f"{titulo.documento} {pagamento.descrever()}" for titulo, pagamento in self.titulos)
+        return f"soma exata dos Títulos {parcelas} = {soma} ({pagamentos})"
+
+
+@dataclass(frozen=True)
+class _Busca:
+    opcoes: tuple[_Opcao, ...]
+    limite_atingido: bool
+    limite: int
+
+    @property
+    def fecha(self) -> bool:
+        return bool(self.opcoes) or self.limite_atingido
+
+    @property
+    def unica(self) -> _Opcao | None:
+        return self.opcoes[0] if len(self.opcoes) == 1 and not self.limite_atingido else None
+
+    def descrever_ambiguidade(self) -> str:
+        opcoes = "; ".join(opcao.descrever() for opcao in self.opcoes)
+        if self.limite_atingido:
+            encontradas = f"; encontradas até o limite: {opcoes}" if opcoes else ""
+            return (
+                f"a busca de somas de Títulos atingiu o limite de {self.limite} combinações examinadas "
+                f"sem garantir uma combinação única{encontradas}"
+            )
+        return f"fecha com mais de uma combinação de Títulos em aberto, considerando o Encargo: {opcoes}"
+
+
+@dataclass(frozen=True)
 class _Titulos:
     todos: list[Titulo]
     por_nosso_numero: dict[str, list[Titulo]]
@@ -36,6 +78,7 @@ class _Titulos:
     nomes: list[_NomeDoFranqueado]
     encargo: ParametrosDeEncargo
     nome_do_pagador: NomeDoPagador
+    limite_de_combinacoes: int
 
     @property
     def franqueados(self) -> set[str]:
@@ -48,6 +91,55 @@ class _Titulos:
             if (pagamento := enquadrar(titulo, lancamento.valor_centavos, lancamento.data, self.encargo)).fecha
         ]
 
+    def buscar(self, titulos: list[Titulo], lancamento: Lancamento) -> _Busca:
+        opcoes = [_Opcao(((titulo, pagamento),)) for titulo, pagamento in self.que_fecham(titulos, lancamento)]
+        limite_atingido = False
+        if len(opcoes) < 2:
+            somas, limite_atingido = _somas_exatas(
+                titulos, lancamento.valor_centavos, self.limite_de_combinacoes, bastam=2 - len(opcoes)
+            )
+            opcoes += [
+                _Opcao(
+                    tuple(
+                        (titulo, enquadrar(titulo, titulo.valor_centavos, lancamento.data, self.encargo))
+                        for titulo in sorted(soma, key=lambda t: (t.sistema_de_origem, t.documento))
+                    )
+                )
+                for soma in somas
+            ]
+        return _Busca(tuple(opcoes), limite_atingido, self.limite_de_combinacoes)
+
+
+def _somas_exatas(
+    titulos: list[Titulo], alvo: int, limite: int, bastam: int
+) -> tuple[list[tuple[Titulo, ...]], bool]:
+    ordenados = sorted(titulos, key=lambda t: (t.valor_centavos, t.sistema_de_origem, t.documento))
+    encontradas: list[tuple[Titulo, ...]] = []
+    examinadas = 0
+
+    def buscar(inicio: int, escolhidos: tuple[Titulo, ...], soma: int) -> bool:
+        nonlocal examinadas
+        for indice in range(inicio, len(ordenados)):
+            titulo = ordenados[indice]
+            nova = soma + titulo.valor_centavos
+            if nova > alvo:
+                return False
+            examinadas += 1
+            if examinadas > limite:
+                return True
+            combinacao = (*escolhidos, titulo)
+            if nova == alvo:
+                if len(combinacao) > 1:
+                    encontradas.append(combinacao)
+                    if len(encontradas) >= bastam:
+                        return True
+            elif buscar(indice + 1, combinacao, nova):
+                return True
+        return False
+
+    buscar(0, (), 0)
+    return encontradas, examinadas > limite
+
 
 def conciliar(
     titulos: Iterable[Titulo],
@@ -55,6 +147,7 @@ def conciliar(
     franqueados: Iterable[Franqueado],
     encargo: ParametrosDeEncargo,
     nome_do_pagador: NomeDoPagador,
+    limite_de_combinacoes: int,
 ) -> list[Classificacao]:
     todos = list(titulos)
     por_nosso_numero: dict[str, list[Titulo]] = defaultdict(list)
@@ -64,9 +157,45 @@ def conciliar(
             por_nosso_numero[titulo.nosso_numero].append(titulo)
         por_franqueado[titulo.franqueado].append(titulo)
     abertos = _Titulos(
-        todos, por_nosso_numero, por_franqueado, _nomes_dos_franqueados(franqueados, todos), encargo, nome_do_pagador
+        todos,
+        por_nosso_numero,
+        por_franqueado,
+        _nomes_dos_franqueados(franqueados, todos),
+        encargo,
+        nome_do_pagador,
+        limite_de_combinacoes,
     )
-    return [_classificar(lancamento, abertos) for lancamento in lancamentos]
+    return _sem_titulo_disputado_na_lista([_classificar(lancamento, abertos) for lancamento in lancamentos])
+
+
+def _sem_titulo_disputado_na_lista(classificacoes: list[Classificacao]) -> list[Classificacao]:
+    na_lista: dict[Titulo, list[Lancamento]] = defaultdict(list)
+    for classificacao in classificacoes:
+        if classificacao.destino is Destino.LISTA_DE_BAIXA:
+            for titulo in classificacao.titulos:
+                na_lista[titulo].append(classificacao.lancamento)
+    return [_disputada(c, na_lista) if c.destino is Destino.LISTA_DE_BAIXA else c for c in classificacoes]
+
+
+def _disputada(classificacao: Classificacao, na_lista: dict[Titulo, list[Lancamento]]) -> Classificacao:
+    outros = {
+        outro
+        for titulo in classificacao.titulos
+        for outro in na_lista[titulo]
+        if outro.chave_natural != classificacao.lancamento.chave_natural
+    }
+    if not outros:
+        return classificacao
+    creditos = ", ".join(
+        f"{outro.data:%d/%m/%Y} {outro.historico} {formatar_reais(outro.valor_centavos)}"
+        for outro in sorted(outros, key=lambda lancamento: lancamento.chave_natural)
+    )
+    return replace(
+        classificacao,
+        destino=Destino.FILA_DE_EXCECOES,
+        explicacao=f"{classificacao.explicacao} Há Título desta proposta que também fecha com outro Crédito: {creditos}.",
+        motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+    )
 
 
 def _nomes_dos_franqueados(franqueados: Iterable[Franqueado], titulos: list[Titulo]) -> list[_NomeDoFranqueado]:
@@ -124,7 +253,7 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
     raizes = {raiz_do_cnpj(c) for c in documentos}
     if len(raizes) == 1:
         franqueado = raiz_do_cnpj(documentos[0])
-        return _por_documento(lancamento, documentos[0], abertos.por_franqueado.get(franqueado, []), abertos.encargo)
+        return _por_documento(lancamento, documentos[0], abertos.por_franqueado.get(franqueado, []), abertos)
     if raizes:
         return _sem_identificacao(
             lancamento,
@@ -163,57 +292,46 @@ def _por_nome(
     identificacao = f"Nome '{nome}' do Extrato é Nome por prefixo de {nomes}"
     franqueados = sorted({n.raiz for n in por_prefixo})
     titulos = [titulo for raiz in franqueados for titulo in abertos.por_franqueado.get(raiz, [])]
-    que_fecham = {
-        raiz: fecham
-        for raiz in franqueados
-        if (fecham := abertos.que_fecham(abertos.por_franqueado.get(raiz, []), lancamento))
+    buscas = {
+        raiz: busca for raiz in franqueados if (busca := abertos.buscar(abertos.por_franqueado.get(raiz, []), lancamento)).fecha
     }
 
-    def fila(motivo: MotivoDeNaoIdentificacao, explicacao: str, sugeridos: list[Titulo]) -> Classificacao:
+    def fila(motivo: MotivoDeNaoIdentificacao, explicacao: str, sugeridos: tuple[Titulo, ...]) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             destino=Destino.FILA_DE_EXCECOES,
-            titulos=tuple(sugeridos),
+            titulos=sugeridos,
             explicacao=f"{identificacao}; {explicacao}.",
             motivo=motivo,
             evidencia=(TipoDeEvidencia.NOME_POR_PREFIXO,),
         )
 
     if not titulos:
-        return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, "nenhum Título em aberto", [])
-    if not que_fecham:
-        detalhe = (
-            f"; {enquadrar(titulos[0], lancamento.valor_centavos, lancamento.data, abertos.encargo).descrever()}"
-            if len(titulos) == 1
-            else ""
-        )
+        return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, "nenhum Título em aberto", ())
+    if not buscas:
         return fila(
             MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
-            f"o valor {valor} não fecha com nenhum Título em aberto, considerando o Encargo: "
-            f"{_documentos(titulos)}{detalhe}",
-            titulos if len(titulos) == 1 else [],
+            f"o valor {valor} {_nao_fecha(titulos, lancamento, abertos.encargo)}",
+            tuple(titulos) if len(titulos) == 1 else (),
         )
-    if len(que_fecham) > 1:
+    if len(buscas) > 1:
+        por_franqueado = "; ".join(
+            f"raiz {raiz}: {'; '.join(opcao.descrever() for opcao in busca.opcoes) or 'limite da busca de somas atingido'}"
+            for raiz, busca in buscas.items()
+        )
         return fila(
             MotivoDeNaoIdentificacao.NOME_AMBIGUO,
-            f"o valor {valor} fecha com Títulos de mais de um Franqueado: "
-            f"{_documentos([titulo for fecham in que_fecham.values() for titulo, _ in fecham])}",
-            [],
+            f"o valor {valor} fecha com Títulos de mais de um Franqueado: {por_franqueado}",
+            (),
         )
-    [fecham] = que_fecham.values()
-    if len(fecham) > 1:
-        return fila(
-            MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
-            f"o valor {valor} fecha com mais de um Título em aberto, considerando o Encargo: "
-            f"{_documentos([titulo for titulo, _ in fecham])}",
-            [],
-        )
-    [(titulo, pagamento)] = fecham
+    [busca] = buscas.values()
+    opcao = busca.unica
+    if opcao is None:
+        return fila(MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO, f"o valor {valor} {busca.descrever_ambiguidade()}", ())
     return fila(
         MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ,
-        f"o valor {valor} é Valor único: Título {titulo.documento} ({titulo.sistema_de_origem}), "
-        f"{pagamento.descrever()}; o nome ainda não é Pagador conhecido",
-        [titulo],
+        f"o valor {valor} é Valor único: {opcao.descrever()}; o nome ainda não é Pagador conhecido",
+        tuple(titulo for titulo, _ in opcao.titulos),
     )
 
 
@@ -244,65 +362,52 @@ def _so_valor(lancamento: Lancamento, nome: str | None, abertos: _Titulos) -> Cl
     )
 
 
-def _por_documento(
-    lancamento: Lancamento, documento: str, titulos: list[Titulo], encargo: ParametrosDeEncargo
-) -> Classificacao:
+def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo], abertos: _Titulos) -> Classificacao:
     valor = formatar_reais(lancamento.valor_centavos)
     pagador = f"CNPJ {documento} no histórico identifica o Franqueado de raiz {raiz_do_cnpj(documento)}"
-    if not titulos:
+
+    def fila(motivo: MotivoDeNaoIdentificacao, explicacao: str, sugeridos: tuple[Titulo, ...] = ()) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             evidencia=(TipoDeEvidencia.CNPJ_CPF,),
             destino=Destino.FILA_DE_EXCECOES,
-            titulos=(),
-            explicacao=f"{pagador}, que não tem Título em aberto.",
-            motivo=MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO,
+            titulos=sugeridos,
+            explicacao=explicacao,
+            motivo=motivo,
         )
-    que_fecham = [
-        (titulo, pagamento)
-        for titulo in titulos
-        if (pagamento := enquadrar(titulo, lancamento.valor_centavos, lancamento.data, encargo)).fecha
-    ]
-    if len(que_fecham) == 1:
-        [(titulo, pagamento)] = que_fecham
+
+    if not titulos:
+        return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, f"{pagador}, que não tem Título em aberto.")
+    busca = abertos.buscar(titulos, lancamento)
+    if opcao := busca.unica:
         return Classificacao(
             lancamento=lancamento,
             evidencia=(TipoDeEvidencia.CNPJ_CPF,),
             destino=Destino.LISTA_DE_BAIXA,
-            titulos=(titulo,),
-            explicacao=(
-                f"{pagador}; o valor {valor} é Valor único entre os Títulos em aberto dele: "
-                f"Título {titulo.documento} ({titulo.sistema_de_origem}), {pagamento.descrever()}."
-            ),
+            titulos=tuple(titulo for titulo, _ in opcao.titulos),
+            explicacao=f"{pagador}; o valor {valor} é Valor único entre os Títulos em aberto dele: {opcao.descrever()}.",
         )
-    mesmo_valor = [titulo for titulo, _ in que_fecham]
-    if mesmo_valor:
-        return Classificacao(
-            lancamento=lancamento,
-            evidencia=(TipoDeEvidencia.CNPJ_CPF,),
-            destino=Destino.FILA_DE_EXCECOES,
-            titulos=(),
-            explicacao=(
-                f"{pagador}, mas o valor {valor} fecha com mais de um Título em aberto dele, considerando o Encargo: "
-                f"{_documentos(mesmo_valor)}."
-            ),
-            motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+    if busca.fecha:
+        return fila(
+            MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+            f"{pagador}, mas o valor {valor} {busca.descrever_ambiguidade()}.",
         )
+    return fila(
+        MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+        f"{pagador}, mas o valor {valor} {_nao_fecha(titulos, lancamento, abertos.encargo)}.",
+        tuple(titulos) if len(titulos) == 1 else (),
+    )
+
+
+def _nao_fecha(titulos: list[Titulo], lancamento: Lancamento, encargo: ParametrosDeEncargo) -> str:
     detalhe = (
         f"; {enquadrar(titulos[0], lancamento.valor_centavos, lancamento.data, encargo).descrever()}"
         if len(titulos) == 1
         else ""
     )
-    return Classificacao(
-        lancamento=lancamento,
-        evidencia=(TipoDeEvidencia.CNPJ_CPF,),
-        destino=Destino.FILA_DE_EXCECOES,
-        titulos=tuple(titulos) if len(titulos) == 1 else (),
-        explicacao=(
-            f"{pagador}, mas o valor {valor} não fecha com nenhum Título em aberto dele, considerando o Encargo: "
-            f"{_documentos(titulos)}{detalhe}."
-        ),
-        motivo=MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+    return (
+        "não fecha com nenhum Título em aberto nem com soma exata de Títulos em aberto, considerando o Encargo: "
+        f"{_documentos(titulos)}{detalhe}"
     )
 
 
