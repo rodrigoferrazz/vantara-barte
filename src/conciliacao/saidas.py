@@ -386,7 +386,7 @@ def _aba_de_cobranca(aba: Worksheet, resultado: Resultado) -> None:
     for na_cobranca in resultado.lista_de_cobranca:
         _linha_da_cobranca(aba, na_cobranca)
     aba.append(())
-    aba.append(("Em análise", "Há Crédito candidato na Lista de baixa ou na Fila de exceções: não cobrar ainda."))
+    aba.append(("Em análise", "Há Crédito candidato na Fila de exceções: não cobrar ainda."))
     aba.append((*_COLUNAS_DA_COBRANCA, "Créditos candidatos"))
     for em_analise in resultado.em_analise:
         _linha_da_cobranca(

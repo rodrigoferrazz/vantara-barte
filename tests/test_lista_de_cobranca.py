@@ -101,7 +101,7 @@ def test_ultima_data_da_conta_considera_extratos_de_execucoes_anteriores(
     assert resultado.resumo.data_de_referencia.data == date(2025, 6, 9)
 
 
-def test_titulo_com_credito_candidato_na_lista_ou_na_fila_fica_em_analise_e_fora_da_cobranca(
+def test_titulo_proposto_na_lista_sai_da_cobranca_e_so_o_com_credito_candidato_na_fila_fica_em_analise(
     pasta: Path, armazenamento: Armazenamento
 ) -> None:
     escrever_protheus(
@@ -127,7 +127,7 @@ def test_titulo_com_credito_candidato_na_lista_ou_na_fila_fica_em_analise_e_fora
     assert [i.titulos[0].documento for i in resultado.lista_de_baixa] == ["NF NA LISTA"]
     assert [i.titulos[0].documento for i in resultado.fila_de_excecoes] == ["NF NA FILA"]
     assert _documentos_a_cobrar(resultado) == ["NF SEM CREDITO"]
-    assert sorted(_documentos_em_analise(resultado)) == ["NF NA FILA", "NF NA LISTA"]
+    assert _documentos_em_analise(resultado) == ["NF NA FILA"]
     [na_fila] = [t for t in resultado.em_analise if t.titulo.documento == "NF NA FILA"]
     assert [c.historico for c in na_fila.creditos_candidatos] == ["DEPOSITO EM DINHEIRO"]
 
@@ -152,6 +152,41 @@ def test_titulos_citados_por_credito_que_fecha_com_mais_de_um_ficam_em_analise(
     assert ambiguo.titulos == ()
     assert resultado.lista_de_cobranca == ()
     assert sorted(_documentos_em_analise(resultado)) == ["NF A", "NF B"]
+
+
+def test_titulos_do_franqueado_de_credito_sem_titulo_candidato_continuam_na_cobranca(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    escrever_protheus(
+        pasta,
+        [
+            TituloProtheus(documento="NF X", valor="900,00", vencimento="02/06/2025"),
+            TituloProtheus(documento="NF Y", valor="400,00", vencimento="02/06/2025"),
+        ],
+    )
+    escrever_extrato_itau(
+        pasta, [LinhaItau("03/06/2025", "PIX RECEBIDO 10200300000140", "650,00"), _tarifa("10/06/2025")]
+    )
+
+    resultado = _executar(pasta, armazenamento)
+
+    assert [i.titulos for i in resultado.fila_de_excecoes] == [()]
+    assert _documentos_a_cobrar(resultado) == ["NF X", "NF Y"]
+    assert resultado.em_analise == ()
+
+
+def test_titulo_unico_do_franqueado_com_valor_que_nao_fecha_fica_em_analise(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    escrever_protheus(pasta, [TituloProtheus(documento="NF X", valor="900,00", vencimento="02/06/2025")])
+    escrever_extrato_itau(
+        pasta, [LinhaItau("03/06/2025", "PIX RECEBIDO 10200300000140", "650,00"), _tarifa("10/06/2025")]
+    )
+
+    resultado = _executar(pasta, armazenamento)
+
+    assert resultado.lista_de_cobranca == ()
+    assert _documentos_em_analise(resultado) == ["NF X"]
 
 
 def test_titulo_marcado_como_possivel_duplicidade_nao_entra_na_cobranca(

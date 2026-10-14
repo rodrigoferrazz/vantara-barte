@@ -112,8 +112,8 @@ def _corpo(resultado: Resultado, decididos_na_tela: Mapping[str, DecisaoDaTela])
                 "Títulos em análise",
                 "em-analise",
                 _total(
-                    f"{total_da_cobranca(resultado.em_analise)}. Há Crédito candidato na Lista de baixa ou na Fila "
-                    "de exceções: não cobrar ainda."
+                    f"{total_da_cobranca(resultado.em_analise)}. Há Crédito candidato na Fila de exceções: "
+                    "não cobrar ainda."
                 )
                 + _cobranca(resultado.em_analise, resultado),
             ),

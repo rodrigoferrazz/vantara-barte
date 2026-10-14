@@ -204,7 +204,7 @@ def test_lista_de_cobranca_aparece_separada_dos_titulos_em_analise(
     assert a_cobrar[0] == "NF SEM CREDITO"
     em_analise = pagina.por_id("em-analise").linhas()
     assert em_analise[0][-1] == "Créditos candidatos"
-    assert sorted(linha[0] for linha in em_analise[1:]) == ["NF NA FILA", "NF NA LISTA"]
+    assert [linha[0] for linha in em_analise[1:]] == ["NF NA FILA"]
     [na_fila] = [linha for linha in em_analise[1:] if linha[0] == "NF NA FILA"]
     assert na_fila[-1] == resultado.fila_de_excecoes[0].identificador
 

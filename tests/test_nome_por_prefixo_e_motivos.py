@@ -188,6 +188,24 @@ def test_valor_nao_fecha_precede_nome_ambiguo(pasta: Path, armazenamento: Armaze
     assert item.titulos == ()
 
 
+def test_nome_por_prefixo_de_franqueado_com_varios_titulos_que_nao_fecham_e_credito_sem_titulo_em_aberto(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    escrever_protheus(
+        pasta,
+        [
+            TituloProtheus(documento="NF 1", valor="12.300,00", cliente="Padaria Lua Cheia Ltda"),
+            TituloProtheus(documento="NF 2", valor="2.700,00", cliente="Padaria Lua Cheia Ltda"),
+        ],
+    )
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO PADARIA LUA CHE", "1.150,00")])
+
+    item = _unico_da_fila(pasta, armazenamento)
+
+    assert item.motivo is MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO
+    assert item.titulos == ()
+
+
 def test_credito_sem_titulo_em_aberto_precede_nome_ambiguo_e_pagador_provavel(
     tmp_path: Path, armazenamento: Armazenamento
 ) -> None:

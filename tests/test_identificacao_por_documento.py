@@ -96,6 +96,27 @@ def test_valor_que_nao_bate_com_titulo_do_franqueado_vai_para_a_fila_como_valor_
     assert [t.documento for t in item.titulos] == ["NF 910031"]
 
 
+def test_franqueado_com_varios_titulos_e_valor_que_nao_fecha_com_nenhum_e_credito_sem_titulo_em_aberto(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    escrever_protheus(
+        pasta,
+        [
+            TituloProtheus(documento="NF 910035", valor="900,00", cnpj=CNPJ_MATRIZ),
+            TituloProtheus(documento="NF 910036", valor="400,00", cnpj=CNPJ_MATRIZ),
+        ],
+    )
+    escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "PIX RECEBIDO 10200300000140", "650,00")])
+
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
+
+    assert resultado.lista_de_baixa == []
+    [item] = resultado.fila_de_excecoes
+    assert item.motivo is MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO
+    assert item.titulos == ()
+    assert "10200300000140" in item.explicacao
+
+
 def test_cnpj_que_nao_e_de_franqueado_nao_identifica_o_pagador(pasta: Path, armazenamento: Armazenamento) -> None:
     escrever_protheus(pasta, [TituloProtheus(documento="NF 910041", valor="410,00", cnpj=CNPJ_MATRIZ)])
     escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "PIX RECEBIDO 99888777000166", "410,00")])

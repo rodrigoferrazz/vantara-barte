@@ -445,8 +445,13 @@ class _Gerador:
             return False
         return self._credito(
             [titulo], Caso.PARCIAL, valor, self._dias_em_dia(titulo), self._historico_com_cnpj(titulo.raiz),
-            Destino.FILA_DE_EXCECOES, MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+            Destino.FILA_DE_EXCECOES, self._motivo_sem_opcao(titulo.raiz),
         )  # fmt: skip
+
+    def _motivo_sem_opcao(self, raiz: str) -> MotivoDeNaoIdentificacao:
+        if len(self.por_raiz[raiz]) == 1:
+            return MotivoDeNaoIdentificacao.VALOR_NAO_FECHA
+        return MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO
 
     def _multa(self, titulo: _Titulo) -> bool:
         multa = Decimal(titulo.valor_centavos) * self.configuracao.encargo.multa_percentual / 100
@@ -486,7 +491,7 @@ class _Gerador:
                 continue
             if self._lancar(
                 _Lancamento(self._conta_qualquer(), self.rng.choice(self.dias_uteis), *self._com_nome(nome), valor, Natureza.CREDITO),
-                Caso.ANTECIPACAO, Destino.FILA_DE_EXCECOES, frozenset(), MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+                Caso.ANTECIPACAO, Destino.FILA_DE_EXCECOES, frozenset(), self._motivo_sem_opcao(franqueado.raiz),
                 franqueado.raiz, nome,
             ):  # fmt: skip
                 quantidade -= 1

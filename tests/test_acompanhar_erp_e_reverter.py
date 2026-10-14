@@ -249,7 +249,8 @@ def test_valor_igual_entre_exportacoes_tem_saldo_pelas_decisoes_e_casa_o_resto(
     [na_lista] = resultado.lista_de_baixa
     assert na_lista.lancamento.valor_centavos == 60000
     assert [t.documento for t in na_lista.titulos] == ["NF 140201"]
-    assert [(t.titulo.documento, t.saldo_centavos) for t in resultado.em_analise] == [("NF 140201", 60000)]
+    assert resultado.em_analise == ()
+    assert "NF 140201" not in [t.titulo.documento for t in resultado.lista_de_cobranca]
 
 
 def test_valor_que_muda_entre_exportacoes_vira_o_saldo_sem_descontar_de_novo_as_decisoes(

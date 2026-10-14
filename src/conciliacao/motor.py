@@ -297,15 +297,24 @@ def lista_de_cobranca(
     if data_de_referencia is None:
         return []
     em_duplicidade = {titulo for duplicidade in duplicidades for titulo in duplicidade.titulos}
-    candidatos: dict[Titulo, list[Lancamento]] = defaultdict(list)
+    propostos = {
+        titulo
+        for classificacao in classificacoes
+        if classificacao.destino is Destino.LISTA_DE_BAIXA
+        for titulo in classificacao.titulos_candidatos
+    }
+    na_fila: dict[Titulo, list[Lancamento]] = defaultdict(list)
     for classificacao in classificacoes:
-        if classificacao.destino is not Destino.FORA_DO_ESCOPO:
+        if classificacao.destino is Destino.FILA_DE_EXCECOES:
             for titulo in classificacao.titulos_candidatos:
-                candidatos[titulo].append(classificacao.lancamento)
+                na_fila[titulo].append(classificacao.lancamento)
     return [
-        TituloNaCobranca(titulo, titulo.valor_centavos, tuple(candidatos[titulo]))
+        TituloNaCobranca(titulo, titulo.valor_centavos, tuple(na_fila[titulo]))
         for titulo in sorted(titulos, key=lambda t: (t.vencimento, t.sistema_de_origem, t.documento))
-        if titulo not in em_duplicidade and titulo.valor_centavos > 0 and data_de_referencia > _cobravel_depois_de(titulo)
+        if titulo not in em_duplicidade
+        and (titulo in na_fila or titulo not in propostos)
+        and titulo.valor_centavos > 0
+        and data_de_referencia > _cobravel_depois_de(titulo)
     ]
 
 
@@ -454,14 +463,24 @@ def _por_nome(
             franqueado=franqueado,
         )
 
-    if not titulos:
-        return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, "nenhum Título em aberto", ())
     if not buscas:
+        unicos = [
+            titulo for raiz in franqueados if (titulo := _unico_em_aberto(abertos.por_franqueado.get(raiz, [])))
+        ]
+        if not unicos:
+            return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, _sem_titulo_candidato(titulos, valor), ())
+        if len(unicos) == 1:
+            return fila(
+                MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+                f"o valor {valor} {_nao_fecha(unicos[0], lancamento, abertos.encargo)}",
+                tuple(unicos),
+            )
         return fila(
             MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
-            f"o valor {valor} {_nao_fecha(titulos, lancamento, abertos.encargo)}",
-            tuple(titulos) if len(titulos) == 1 else (),
-            tuple(titulos),
+            f"o valor {valor} não fecha, nem considerando o Encargo, com o único Título em aberto de cada "
+            f"Franqueado: {_documentos(unicos)}",
+            (),
+            tuple(unicos),
         )
     if len(buscas) > 1:
         por_franqueado = "; ".join(
@@ -631,8 +650,6 @@ def _por_pagador_identificado(
             franqueado=franqueado,
         )
 
-    if not titulos:
-        return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, f"{pagador}, que não tem Título em aberto.")
     busca = abertos.buscar(titulos, lancamento)
     if opcao := busca.unica:
         return Classificacao(
@@ -650,23 +667,34 @@ def _por_pagador_identificado(
             f"{pagador}, mas o valor {valor} {busca.descrever_ambiguidade()}.",
             citados=busca.titulos,
         )
-    return fila(
-        MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
-        f"{pagador}, mas o valor {valor} {_nao_fecha(titulos, lancamento, abertos.encargo)}.",
-        tuple(titulos) if len(titulos) == 1 else (),
-        tuple(titulos),
-    )
+    if unico := _unico_em_aberto(titulos):
+        return fila(
+            MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+            f"{pagador}, mas o valor {valor} {_nao_fecha(unico, lancamento, abertos.encargo)}.",
+            (unico,),
+        )
+    return fila(MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO, f"{pagador}; {_sem_titulo_candidato(titulos, valor)}.")
 
 
-def _nao_fecha(titulos: list[Titulo], lancamento: Lancamento, encargo: ParametrosDeEncargo) -> str:
-    detalhe = (
-        f"; {enquadrar(titulos[0], lancamento.valor_centavos, lancamento.data, encargo).descrever()}"
-        if len(titulos) == 1
-        else ""
-    )
+def _unico_em_aberto(titulos: list[Titulo]) -> Titulo | None:
+    # Sem opção que feche, só o único Título em aberto do Franqueado é candidato: é frente a ele que o Crédito
+    # é Diferença a menor ou Valor a maior. Com vários, nenhum deles é apontado.
+    return titulos[0] if len(titulos) == 1 else None
+
+
+def _nao_fecha(titulo: Titulo, lancamento: Lancamento, encargo: ParametrosDeEncargo) -> str:
     return (
-        "não fecha com nenhum Título em aberto nem com soma exata de Títulos em aberto, considerando o Encargo: "
-        f"{_documentos(titulos)}{detalhe}"
+        f"não fecha, nem considerando o Encargo, com o único Título em aberto do Franqueado, {_documentos([titulo])}: "
+        f"{enquadrar(titulo, lancamento.valor_centavos, lancamento.data, encargo).descrever()}"
+    )
+
+
+def _sem_titulo_candidato(titulos: list[Titulo], valor: str) -> str:
+    if not titulos:
+        return "nenhum Título em aberto, então nenhum Título candidato"
+    return (
+        f"nenhum Título candidato: o valor {valor} não fecha com nenhum dos Títulos em aberto, sozinho considerando "
+        f"o Encargo ou em soma exata, e com mais de um Título em aberto nenhum deles é apontado: {_documentos(titulos)}"
     )
 
 

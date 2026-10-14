@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
 from openpyxl import load_workbook
 
 from conciliacao.armazenamento import Armazenamento
@@ -62,8 +63,8 @@ def test_cada_credito_da_fila_conta_em_um_so_motivo_e_todos_os_motivos_aparecem(
     assert _por_nome(causa_raiz.por_motivo) == {
         "sem identificação do pagador": (1, 33300),
         "nome ambíguo": (0, 0),
-        "valor não fecha": (2, 198400),
-        "Crédito sem título em aberto": (0, 0),
+        "valor não fecha": (1, 75000),
+        "Crédito sem título em aberto": (1, 123400),
         "mais de uma combinação possível": (0, 0),
         "Possível duplicidade entre sistemas": (0, 0),
         "Possível fonte não integrada": (0, 0),
@@ -214,7 +215,7 @@ def test_workbook_traz_a_aba_causa_raiz_com_as_quatro_agregacoes(
     for bloco in blocos.values():
         assert bloco["Total"] == (5, 1, 3817, 1)
     motivos = blocos["Por Motivo de não identificação"]
-    assert motivos["valor não fecha"] == (2, 2 / 5, 1984, 1984 / 3817)
+    assert motivos["valor não fecha"] == pytest.approx((1, 1 / 5, 750, 750 / 3817))
     assert motivos["Possível fonte não integrada"] == (0, 0, 0, 0)
     assert list(blocos["Por Franqueado"])[0] == "Aurora Panificadora Ltda (raiz 10200300)"
     assert blocos["Por Franqueado"][CausaRaiz.SEM_FRANQUEADO] == (1, 1 / 5, 333, 333 / 3817)

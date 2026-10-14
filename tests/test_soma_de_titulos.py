@@ -67,7 +67,7 @@ def test_soma_com_titulo_atrasado_pago_pelo_valor_original_registra_encargo_nao_
     assert "Encargo não pago" in item.explicacao
 
 
-def test_soma_que_so_fecha_com_encargo_pago_vai_para_a_fila_como_valor_nao_fecha(
+def test_soma_que_so_fecha_com_encargo_pago_vai_para_a_fila_sem_titulo_candidato(
     pasta: Path, armazenamento: Armazenamento
 ) -> None:
     escrever_protheus(pasta, _titulos_do_a("1.000,00", "500,00", vencimento="03/03/2025"))
@@ -75,7 +75,7 @@ def test_soma_que_so_fecha_com_encargo_pago_vai_para_a_fila_como_valor_nao_fecha
 
     item = _unico_da_fila(_executar(pasta, armazenamento))
 
-    assert item.motivo is MotivoDeNaoIdentificacao.VALOR_NAO_FECHA
+    assert item.motivo is MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO
 
 
 def test_soma_exata_e_unica_com_nome_nao_confirmado_vai_para_a_fila_como_pagador_provavel_com_a_combinacao(
@@ -196,19 +196,26 @@ def test_limite_de_combinacoes_invalido_recusa_a_configuracao(tmp_path: Path, so
 
 
 @pytest.mark.parametrize(
-    ("valores", "credito"),
-    [(("1.000,00",), "600,00"), (("1.000,00", "900,00"), "600,00")],
+    ("valores", "credito", "motivo"),
+    [
+        (("1.000,00",), "600,00", MotivoDeNaoIdentificacao.VALOR_NAO_FECHA),
+        (("1.000,00", "900,00"), "600,00", MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO),
+    ],
     ids=["um titulo", "nenhuma soma fecha"],
 )
-def test_credito_que_paga_parte_de_um_titulo_vai_para_a_fila_como_valor_nao_fecha(
-    pasta: Path, armazenamento: Armazenamento, valores: tuple[str, ...], credito: str
+def test_credito_que_paga_parte_de_um_titulo_vai_para_a_fila(
+    pasta: Path,
+    armazenamento: Armazenamento,
+    valores: tuple[str, ...],
+    credito: str,
+    motivo: MotivoDeNaoIdentificacao,
 ) -> None:
     escrever_protheus(pasta, _titulos_do_a(*valores))
     escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", PIX_DO_CNPJ_A, credito)])
 
     item = _unico_da_fila(_executar(pasta, armazenamento))
 
-    assert item.motivo is MotivoDeNaoIdentificacao.VALOR_NAO_FECHA
+    assert item.motivo is motivo
 
 
 def test_varios_creditos_pagando_varios_titulos_nao_vao_para_a_lista(

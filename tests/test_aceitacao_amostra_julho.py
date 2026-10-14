@@ -103,20 +103,9 @@ TABELA_DA_SPEC = (
     Esperado("31/07", "TARIFA PIX EMISSAO", "89,00", FORA),
 )
 
-VALOR_NAO_FECHA_EM_VEZ_DE_SEM_TITULO = (
-    "Pela regra do ticket 06, Crédito de Franqueado com Títulos em aberto que não fecham é 'valor não fecha', "
-    "antes de 'Crédito sem título em aberto'. Os dois Títulos do Franqueado seguem em aberto na exportação "
-    "(um proposto na Lista, outro sugerido na Fila) e a plataforma não reserva Títulos propostos ou sugeridos "
-    "a outro Crédito; ver docs/decisoes-implementacao.md."
-)
 QWEN_RESPONDE_NAO = (
     "O qwen2.5:3b com o prompt nome-v1 responde 'não' para este nome (ticket 08), então o Crédito fica "
     "'sem identificação do pagador' com evidência só valor. Limitação do modelo; o prompt não é ajustado à amostra."
-)
-EM_ANALISE_INCLUI_A_LISTA = (
-    "Pela regra do ticket 09, Título com Crédito candidato na Lista de baixa ou na Fila sai da cobrança e fica "
-    "em análise; a amostra dá 14 (os 9 sugeridos na Fila mais 5 propostos na Lista, sem a NF 104580 da "
-    "Possível duplicidade). A spec conta 9, só os da Fila."
 )
 
 
@@ -174,8 +163,6 @@ def test_totais_com_data_de_referencia_31_07(resultado: Resultado) -> None:
 def test_cada_lancamento_tem_o_destino_o_titulo_e_o_motivo_da_tabela_da_spec(
     resultado: Resultado, esperado: Esperado, request: pytest.FixtureRequest
 ) -> None:
-    if esperado.motivo is Motivo.CREDITO_SEM_TITULO_EM_ABERTO:
-        request.applymarker(pytest.mark.xfail(strict=True, reason=VALOR_NAO_FECHA_EM_VEZ_DE_SEM_TITULO))
     if esperado.evidencia is Evidencia.PARECER_DE_LLM and _com_ollama(request):
         request.applymarker(pytest.mark.xfail(strict=True, reason=QWEN_RESPONDE_NAO))
 
@@ -225,7 +212,6 @@ def test_lista_de_cobranca_com_norte_panificados(resultado: Resultado) -> None:
     assert titulo.saldo_centavos == _centavos("8.120,00")
 
 
-@pytest.mark.xfail(strict=True, reason=EM_ANALISE_INCLUI_A_LISTA)
 def test_nove_titulos_em_analise(resultado: Resultado) -> None:
     assert len(resultado.em_analise) == 9
 

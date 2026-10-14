@@ -97,12 +97,14 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** o motor recebe as raízes de CNPJ de todos os Títulos já guardados, de qualquer execução, além dos Títulos em aberto da execução atual. Crédito identificado cujo Franqueado não tem nenhum Título em aberto vai para a Fila como "Crédito sem título em aberto", sem sugestão; como todo Crédito guardado é reclassificado a cada execução, ele casa quando o Título aparece.
 - **Por quê:** um Franqueado cujos Títulos foram todos baixados continua sendo Franqueado; sem lembrar dele, a antecipação nunca seria identificada. O caso só leva à Fila, nunca à Lista.
 - **Alternativas:** conhecer só os Franqueados da exportação atual (Crédito sem título em aberto seria inalcançável por documento).
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto
 
 ## Ticket 03: Franqueado identificado com valor que não fecha ou que se repete
 
 - **Decisão:** com Títulos em aberto e nenhum de mesmo valor, o Crédito vai para a Fila como "valor não fecha", sugerindo o Título só quando o Franqueado tem um único Título em aberto. Com mais de um Título de mesmo valor, vai como "mais de uma combinação possível", sem sugestão, citando os Títulos na explicação.
 - **Por quê:** a precedência da spec põe "valor não fecha" antes de "Crédito sem título em aberto"; sugerir o único Título repete o tratamento do nosso número com valor diferente (ticket 01); com vários Títulos a plataforma não escolhe. Valor único também abrange combinação, por isso o Motivo de combinação. Encargo (ticket 04) e somas (ticket 07) refinam esses casos.
 - **Alternativas:** tratar como "Crédito sem título em aberto"; sugerir todos os Títulos de mesmo valor.
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto
 
 ## Ticket 04: feriados bancários nacionais
 
@@ -127,6 +129,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** na identificação por CNPJ, Valor único passa a ser "um só Título em aberto do Franqueado com que o valor fecha, considerando o Encargo". Se fecha com mais de um (ex.: exato num e dentro do Encargo de outro), vai para a Fila como "mais de uma combinação possível". Se não fecha com nenhum, segue "valor não fecha", sugerindo o Título quando é o único e explicando se é Diferença a menor ou Valor a maior.
 - **Por quê:** a spec põe "CNPJ + Valor único; Encargo não pago" e "CNPJ; 22.900 + 458 de multa" na Lista; preferir o valor exato seria escolher entre opções válidas.
 - **Alternativas:** Encargo só no nosso número; preferir o Título de valor exato.
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto
 
 ## Ticket 05: layout exato da exportação Omie
 
@@ -170,6 +173,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** segue a precedência da spec (valor não fecha, Crédito sem título em aberto, nome ambíguo, pagador provável) e as decisões dos tickets 03 e 04 para o caso de CNPJ; "pagador provável" fica só para o item que está na Fila apenas por falta de confirmação do nome (história 40).
 - **Alternativas:** sugerir todos os Títulos no nome ambíguo (pareceria uma combinação); tratar o caso de vários Títulos do mesmo Franqueado como "pagador provável".
 - **Exemplo que sai da regra:** na amostra, o PIX de 30/07 (1.850,00) aparece como "Crédito sem título em aberto"; pela regra ele fica "valor não fecha", porque os dois Títulos do Franqueado continuam em aberto na exportação, ainda que um esteja proposto na Lista e o outro sugerido a outro Crédito da Fila. Reservar Títulos já propostos ou sugeridos a outro Crédito não faz parte deste ticket.
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto
 
 ## Ticket 06: Crédito que só bate por valor
 
@@ -263,6 +267,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** o ticket diz "na Lista ou na Fila", e a história 43 quer que nunca se cobre quem já pagou; um Crédito que fecha com dois Títulos sem saber qual é candidato dos dois.
 - **Alternativas:** só Títulos sugeridos (cobraria Títulos que um Crédito pendente pode quitar); só a Fila como "em análise", como na contagem da amostra.
 - **Exemplo que sai da regra:** a amostra de julho espera 9 Títulos em análise, que são só os sugeridos na Fila. Pela regra do ticket, os Títulos propostos na Lista de baixa ainda não confirmada também ficam em análise, e a amostra dá 14 (NF 104580 fica fora por estar em Possível duplicidade). O ticket 17 precisa decidir isso com o usuário.
+- **Substituída:** ver Correção: "em análise" só com Crédito candidato na Fila
 
 ## Ticket 09: vencido, boleto e janela de compensação
 
@@ -330,6 +335,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** a sugestão de um Crédito que só bate por valor depende de outros Títulos que fecham por coincidência, e a spec só exige precisão na Lista. Comparar destino e Motivo de tudo garante que o gabarito descreve os casos que diz gerar.
 - **Alternativas:** comparar só a Lista (o gerador poderia gerar casos que nunca chegam ao destino pretendido); comparar também as sugestões da Fila.
 - **Exemplo que sai da regra:** a história 27 trata a antecipação como "Crédito sem título em aberto". Numa execução só, o Franqueado identificado sempre tem outros Títulos em aberto, então pela decisão do ticket 06 a antecipação vai como "valor não fecha", sem Título, e é isso que o gabarito espera.
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto
 
 ## Ticket 12: de onde vem o workbook lido de volta
 
@@ -559,9 +565,23 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** três divergências ficam registradas como `xfail(strict=True)`, sem mudar regra de produção: o PIX de 30/07 (1.850,00) sai "valor não fecha" em vez de "Crédito sem título em aberto" (ticket 06, Títulos propostos ou sugeridos não são reservados); "em análise" dá 14 em vez de 9 (ticket 09 conta Crédito candidato na Lista ou na Fila); com o Ollama real, DOCE PONTO e SABOR CIA saem "sem identificação do pagador" com evidência só valor (ticket 08, o `qwen2.5:3b` responde "não"). O TED de 14/07 tem a sugestão NF 104533 + NF 104588 nos dois casos: com o "sim" pelo parecer, com o "não" pela sugestão por valor do Franqueado candidato.
 - **Por quê:** a regra é aplicada como princípio e não é ajustada aos exemplos; as duas primeiras dependem de decisão do usuário (reservar Títulos já propostos, o que conta como "em análise") e a terceira é limitação do modelo.
 - **Alternativas:** reservar Títulos propostos na Lista ou sugeridos na Fila; contar só a Fila em "em análise"; ajustar o prompt aos nomes da amostra.
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto e Correção: "em análise" só com Crédito candidato na Fila
 
 ## Ticket 17: verificação de identificadores da amostra no código de produção
 
 - **Decisão:** o teste lê os arquivos da amostra e monta os identificadores: nomes dos clientes dos Títulos e nomes do pagador no histórico do Extrato (depois dos prefixos de canal do adaptador), documentos e o número final de cada um, CNPJs (formatados e só dígitos), nossos números, números de 5 ou mais dígitos do Extrato e cada valor em quatro formas (`18.450,00`, `18450,00`, `18450.00`, centavos). Procura cada um, sem diferenciar maiúsculas e como palavra inteira, em todo `src/`. Textos genéricos de banco (como "DEPOSITO NAO IDENTIFICADO" e "TARIFA PIX EMISSAO") não contam como nome. A verificação achou um CNPJ da amostra como exemplo de formato numa mensagem de erro de `normalizacao.py`, trocado por `00.000.000/0000-00`.
 - **Por quê:** derivar a lista dos arquivos garante que um dado novo da amostra também é verificado, sem repetir a amostra no teste; a palavra inteira evita falso positivo com números que só contêm um valor.
 - **Alternativas:** lista fixa de identificadores no teste; procurar também em `conciliacao.toml` (configuração, não código).
+
+## Correção: Título candidato e Crédito sem título em aberto
+
+- **Decisão:** Título candidato de um Crédito é (1) o Título do nosso número do Crédito; (2) entre os Títulos em aberto do Franqueado identificado, cada opção que fecha com o valor (Título sozinho dentro do Encargo e da tolerância, ou soma exata); (3) sem opção que feche, o único Título em aberto do Franqueado, frente ao qual o Crédito é Diferença a menor ou Valor a maior. Com dois ou mais Títulos em aberto e nenhuma opção que feche, nenhum Título é apontado e não há candidato. Assim, "valor não fecha" sempre tem o Título candidato sugerido e o Crédito de Franqueado identificado sem candidato vai para a Fila como "Crédito sem título em aberto", sem sugestão, e é retentado a cada importação. Vale igual para CNPJ, Pagador conhecido e Nome por prefixo; no Nome por prefixo de vários Franqueados, os candidatos são os Títulos únicos de cada um: um só vira "valor não fecha" com ele sugerido, mais de um vira "valor não fecha" sem sugestão, citando-os (como no ticket 06). `citados` passa a levar só Títulos candidatos; Títulos do Franqueado que não são candidatos ficam só na explicação. O gerador sintético grava no gabarito do pagamento parcial por CNPJ e da antecipação "valor não fecha" quando o Franqueado tem um só Título e "Crédito sem título em aberto" quando tem mais.
+- **Por quê:** decisão do usuário ("segue a spec"). O CONTEXT.md (linha 96) define "Crédito sem título em aberto" como Crédito de Franqueado identificado "sem nenhum Título candidato", não "sem Título em aberto"; Diferença a menor e Valor a maior (CONTEXT.md, linhas 83-90; spec, histórias 19 e 21) são medidos frente a um Título. A regra anterior deixava a história 27 (antecipação, spec linha 63) inalcançável sempre que o Franqueado tinha outro Título em aberto e mandava Franqueado com vários Títulos para "valor não fecha" sem Título sugerido, contra a história 42 (spec linha 84). Pela regra, o PIX de 30/07 da amostra (dois Títulos em aberto do Franqueado, nenhuma opção que feche) sai "Crédito sem título em aberto", sem reservar Títulos.
+- **Alternativas:** Título candidato por proximidade do valor (exigiria uma faixa que nem a spec nem o CONTEXT definem); reservar Títulos já propostos ou sugeridos a outro Crédito (resolveria a amostra por outro caminho, mas não a história 42); tratar todos os Títulos do Franqueado como candidatos (é a regra anterior).
+
+## Correção: "em análise" só com Crédito candidato na Fila
+
+- **Decisão:** "em análise" mostra só Títulos com Crédito candidato na Fila de exceções, com esses Créditos. Título proposto na Lista de baixa sai da cobrança mas não entra em "em análise", a menos que também tenha Crédito candidato na Fila. Os Títulos candidatos são os sugeridos e os `citados`, que agora só levam Títulos candidatos (ver a correção anterior). Os textos de "em análise" no workbook e na tela dizem "Crédito candidato na Fila de exceções".
+- **Por quê:** decisão do usuário ("segue a spec"). A história 46 (spec linha 91) restringe "em análise" a Títulos com Crédito candidato na Fila; a história 43 (spec linha 178, "sem Crédito candidato confirmado ou em análise") tira da cobrança também o Título proposto na Lista. A amostra passa a dar os 9 Títulos em análise da spec.
+- **Alternativas:** manter a Lista em "em análise" (regra anterior); devolver à cobrança o Título proposto na Lista (cobraria quem já pagou).
+
