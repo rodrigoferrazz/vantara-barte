@@ -15,6 +15,7 @@ from conciliacao.dominio import (
     TituloConfirmado,
     TituloNoAcompanhamento,
     BaixaManual,
+    DecisaoDaTela,
     DecisaoRegistrada,
     DecisaoSobreProposta,
     DecisoesLidas,
@@ -34,6 +35,7 @@ from conciliacao.dominio import (
     Item,
     ItemDeTitulo,
     Lancamento,
+    LinhaDeDecisao,
     MotivoDeNaoIdentificacao,
     Natureza,
     PagadorConhecido,
@@ -232,6 +234,24 @@ CREATE TABLE IF NOT EXISTS acompanhamento_do_erp (
     explicacao TEXT NOT NULL,
     saldo_centavos INTEGER
 );
+CREATE TABLE IF NOT EXISTS decisoes_da_tela (
+    id INTEGER PRIMARY KEY,
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    aba TEXT NOT NULL,
+    item TEXT NOT NULL,
+    decisao TEXT NOT NULL,
+    motivo TEXT NOT NULL,
+    titulos TEXT NOT NULL,
+    franqueado TEXT NOT NULL,
+    referencia TEXT NOT NULL,
+    autor TEXT NOT NULL,
+    momento TEXT NOT NULL,
+    execucao_que_leu INTEGER REFERENCES execucoes(id)
+);
+CREATE TABLE IF NOT EXISTS conflitos_das_decisoes (
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    texto TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS limites_de_queda (
     execucao_id INTEGER NOT NULL UNIQUE REFERENCES execucoes(id),
     pontos_percentuais TEXT NOT NULL
@@ -343,6 +363,44 @@ class Armazenamento:
             if confirmado_por_nome:
                 por_nome.add(nome)
         return [PagadorConhecido(nome, tuple(f)) for nome, f in franqueados.items() if nome in por_nome]
+
+    def registrar_decisao_da_tela(self, execucao: int, linha: LinhaDeDecisao, autor: str, momento: datetime) -> None:
+        self._conexao.execute(
+            "DELETE FROM decisoes_da_tela WHERE execucao_id = ? AND item = ? AND execucao_que_leu IS NULL",
+            (execucao, linha.item),
+        )
+        self._conexao.execute(
+            "INSERT INTO decisoes_da_tela (execucao_id, aba, item, decisao, motivo, titulos, franqueado, referencia,"
+            " autor, momento) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                execucao,
+                linha.aba,
+                linha.item,
+                linha.decisao,
+                linha.motivo,
+                linha.titulos,
+                linha.franqueado,
+                linha.referencia,
+                autor,
+                momento.isoformat(),
+            ),
+        )
+
+    def decisoes_da_tela_pendentes(self) -> list[DecisaoDaTela]:
+        linhas = self._conexao.execute(
+            "SELECT id, execucao_id, aba, item, decisao, motivo, titulos, franqueado, referencia, autor, momento"
+            " FROM decisoes_da_tela WHERE execucao_que_leu IS NULL ORDER BY id"
+        )
+        return [
+            DecisaoDaTela(
+                identificador,
+                execucao,
+                LinhaDeDecisao(aba, item, decisao, motivo, titulos, franqueado, referencia),
+                autor,
+                datetime.fromisoformat(momento),
+            )
+            for identificador, execucao, aba, item, decisao, motivo, titulos, franqueado, referencia, autor, momento in linhas
+        ]
 
     def ultima_execucao(self) -> int | None:
         (execucao,) = self._conexao.execute("SELECT MAX(id) FROM execucoes").fetchone()
@@ -701,6 +759,8 @@ class Armazenamento:
         decisoes_de_duplicidade_aplicadas: Iterable[int] = (),
         sistemas_exportados: Iterable[str] = (),
         acompanhamento_do_erp: Iterable[TituloNoAcompanhamento] = (),
+        decisoes_da_tela_lidas: Iterable[int] = (),
+        conflitos_das_decisoes: Iterable[str] = (),
     ) -> int:
         cursor = self._conexao.execute(
             "INSERT INTO execucoes (momento, lancamentos_novos) VALUES (?, ?)",
@@ -728,6 +788,14 @@ class Armazenamento:
         self._conexao.executemany(
             "INSERT INTO avisos_das_decisoes (execucao_id, texto) VALUES (?, ?)",
             [(execucao, aviso) for aviso in avisos_das_decisoes],
+        )
+        self._conexao.executemany(
+            "UPDATE decisoes_da_tela SET execucao_que_leu = ? WHERE id = ?",
+            [(execucao, decisao) for decisao in decisoes_da_tela_lidas],
+        )
+        self._conexao.executemany(
+            "INSERT INTO conflitos_das_decisoes (execucao_id, texto) VALUES (?, ?)",
+            [(execucao, conflito) for conflito in conflitos_das_decisoes],
         )
         id_do_titulo = {titulo: self._guardar_titulo(execucao, titulo) for titulo in titulos}
         self._conexao.executemany(
@@ -991,6 +1059,9 @@ class Armazenamento:
         (duplicidades,) = self._conexao.execute(
             "SELECT COUNT(*) FROM decisoes_de_duplicidade WHERE execucao_que_aplicou = ?", (execucao,)
         ).fetchone()
+        conflitos = self._conexao.execute(
+            "SELECT texto FROM conflitos_das_decisoes WHERE execucao_id = ? ORDER BY rowid", (execucao,)
+        )
         return DecisoesLidas(
             confirmadas=tipos[TipoDeDecisao.CONFIRMAR],
             rejeitadas=tipos[TipoDeDecisao.REJEITAR],
@@ -999,6 +1070,7 @@ class Armazenamento:
             conciliados_fora=tipos[TipoDeDecisao.CONCILIADO_FORA],
             duplicidades=duplicidades,
             revertidas=tipos[TipoDeDecisao.REVERTER],
+            conflitos=tuple(texto for (texto,) in conflitos),
         )
 
     def _baixa_manual(self, execucao: int) -> Iterator[BaixaManual]:

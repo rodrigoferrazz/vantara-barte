@@ -291,6 +291,26 @@ class BaixaManual:
 
 
 @dataclass(frozen=True)
+class LinhaDeDecisao:
+    aba: str
+    item: str
+    decisao: str
+    motivo: str = ""
+    titulos: str = ""
+    franqueado: str = ""
+    referencia: str = ""
+
+
+@dataclass(frozen=True)
+class DecisaoDaTela:
+    identificador: int
+    execucao: int
+    linha: LinhaDeDecisao
+    autor: str
+    momento: datetime
+
+
+@dataclass(frozen=True)
 class DecisoesLidas:
     confirmadas: int = 0
     rejeitadas: int = 0

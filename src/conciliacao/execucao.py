@@ -8,12 +8,11 @@ from conciliacao.adaptadores import canal_do_credito, ler_pasta, nome_do_pagador
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
-from conciliacao.decisoes import DecisoesAplicadas, aplicar_decisoes_do_excel
+from conciliacao.decisoes import aplicar_decisoes
 from conciliacao.dominio import (
     ChaveNatural,
     Classificacao,
     DataDeReferencia,
-    DecisoesLidas,
     Destino,
     Lancamento,
     MotivoDeNaoIdentificacao,
@@ -36,11 +35,7 @@ def executar_conciliacao(
 ) -> Resultado:
     leitura = ler_pasta(pasta, configuracao)
     with armazenamento.transacao():
-        decisoes = (
-            aplicar_decisoes_do_excel(workbook_anterior, armazenamento, configuracao.encargo, datetime.now())
-            if workbook_anterior is not None and workbook_anterior.exists()
-            else DecisoesAplicadas(DecisoesLidas(), ())
-        )
+        decisoes = aplicar_decisoes(armazenamento, configuracao.encargo, datetime.now(), workbook_anterior)
         cancelados = armazenamento.titulos_cancelados_na_origem()
         acompanhamento = acompanhar_o_erp(
             atuais=leitura.titulos,
@@ -116,6 +111,8 @@ def executar_conciliacao(
             decisoes_de_duplicidade_aplicadas=decisoes.duplicidades,
             sistemas_exportados=leitura.sistemas_exportados,
             acompanhamento_do_erp=acompanhamento.situacoes,
+            decisoes_da_tela_lidas=decisoes.da_tela,
+            conflitos_das_decisoes=decisoes.lidas.conflitos,
         )
     return armazenamento.carregar_resultado(execucao)
 

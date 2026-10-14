@@ -517,3 +517,27 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** o Resumo da tela é a mesma lista de linhas da aba Resumo, gerada por uma função compartilhada (`linhas_do_resumo`), para que os totais nunca divirjam. Seções: Resumo, Lista de baixa, Fila de exceções (com os itens de Título, como na aba), Lista de cobrança, Títulos em análise (com os Créditos candidatos), Causa raiz e Fora do escopo. Lista de baixa e Fila têm as colunas Item, Crédito, Título(s), Evidência, Motivo e Explicação; o parecer da IA vai num bloco destacado dentro da Explicação, com a marcação "IA indisponível" quando for o caso. A causa raiz tem dois gráficos de barras horizontais em SVG desenhados no servidor (quantidade e valor por Motivo, com todos os Motivos, inclusive os zerados, como na aba) e as tabelas por Motivo, Franqueado, banco e canal. Baixa manual, Cancelar na origem, Acompanhamento do ERP, Métricas e Arquivos recusados ficam só no workbook (os recusados aparecem no Resumo).
 - **Por quê:** a spec lista exatamente o que a tela mostra; repetir o resto do workbook aumentaria a superfície sem pedido. Compartilhar as linhas do Resumo é a forma mais simples de garantir que tela e workbook mostram os mesmos totais.
 - **Alternativas:** todas as abas do workbook na tela; um único gráfico com duas barras por Motivo; esconder Motivos zerados.
+
+## Ticket 15: decisões da tela ficam pendentes até a próxima execução
+
+- **Decisão:** a tela grava cada decisão como uma linha pendente (mesmos campos de uma linha do workbook: aba, item, decisão, motivo, Títulos escolhidos, Franqueado, referência, mais autor e momento) na tabela `decisoes_da_tela` do mesmo armazenamento. Na etapa "aplicar decisões" da execução seguinte, as linhas do Excel e as pendentes da tela passam pela mesma interpretação e pelo mesmo registro (`aplicar_decisoes`), cada uma com sua origem ("Excel" ou "Tela"); as pendentes são marcadas como lidas por aquela execução, aplicadas ou não. A tela mostra a decisão pendente de cada item.
+- **Por quê:** a spec põe a aplicação das decisões (Excel e tela) numa etapa da execução, detectando conflitos "desde a última execução"; aplicar na hora do clique tornaria impossível não aplicar nada quando o Excel trouxer o mesmo item depois. Um só interpretador garante o mesmo efeito, as mesmas validações e os mesmos avisos no Resumo.
+- **Alternativas:** aplicar a decisão da tela no clique e tratar o Excel como conflito depois (a decisão da tela já teria efeito); validar tudo no clique com a configuração do Encargo (a tela passaria a depender da configuração).
+
+## Ticket 15: quem decide pela tela e o que a tela valida no clique
+
+- **Decisão:** o autor das decisões da tela é o usuário do sistema que abriu a tela, ou o nome dado em `--analista`; o momento é o do clique. No clique a tela só recusa (sem gravar, com a mensagem) o que é certamente inválido: não há execução, item que não está na Lista de baixa ou na Fila da última execução, decisão vazia e rejeição sem motivo. O resto (Título escolhido, Conciliado fora, Saldo) é validado na aplicação, como no Excel, e o que não for aplicado vira aviso no Resumo.
+- **Por quê:** a autenticação está fora do escopo e a decisão precisa de autor; o usuário do sistema é o dado mais confiável disponível sem pedir nada a mais por clique. Validar o certo no clique evita surpresa sem duplicar a interpretação.
+- **Alternativas:** campo de nome em cada formulário; autor fixo "Tela"; validação completa no clique.
+
+## Ticket 15: confirmar o lote e decidir de novo pela tela
+
+- **Decisão:** "Confirmar o lote" registra "confirmar" para os itens da Lista de baixa que ainda não têm decisão da tela; cada item também pode ser confirmado ou rejeitado (com motivo) sozinho. Uma nova decisão da tela sobre o mesmo item, antes da execução seguinte, substitui a anterior.
+- **Por quê:** é o equivalente do workbook, em que o lote vem com "confirmar" e a Analista só muda o que rejeita; e, como no Excel, vale o último estado salvo antes da execução.
+- **Alternativas:** o lote sobrescrever as rejeições já feitas; recusar segunda decisão sobre o item.
+
+## Ticket 15: o que conta como conflito
+
+- **Decisão:** conflito é o mesmo identificador de item com linha no workbook aplicável (salvo pela Analista e da última execução) e decisão pendente da tela, mesmo que as decisões coincidam. Toda linha da Lista de baixa de um workbook salvo conta como decisão (o "confirmar" pré-preenchido e a célula vazia também), e na Fila só as linhas com decisão. Nenhuma das duas é aplicada, o conflito vai para `conflitos_das_decisoes` (Resumo e tela, numa seção destacada) e a decisão da tela é dada como lida: o item volta a aparecer para nova decisão, sem conflito repetido. Workbook ignorado (sem autor, de outra execução) não gera conflito. O aviso de Título usado por mais de uma decisão passou a valer entre as duas origens.
+- **Por quê:** a spec adota a interpretação literal e diz que a plataforma não escolhe entre as origens; a linha pré-preenchida é uma decisão do workbook salvo, como no ticket 12.
+- **Alternativas:** só linhas alteradas pela Analista contarem (o workbook não guarda o que foi alterado); manter a decisão da tela pendente após o conflito.

@@ -18,6 +18,7 @@ from conciliacao.dominio import (
     Item,
     ItemDeTitulo,
     Lancamento,
+    LinhaDeDecisao,
     MotivoDeNaoIdentificacao,
     Resposta,
     TipoDeDecisao,
@@ -40,30 +41,27 @@ from conciliacao.saidas import (
 )
 
 ORIGEM_EXCEL = "Excel"
+ORIGEM_TELA = "Tela"
 
 type ChaveDoTitulo = tuple[str, str]
 
-_DECISOES_DE_CREDITO_DA_FILA = (
+DECISOES_DE_CREDITO_DA_FILA = (
     TipoDeDecisao.CONFIRMAR,
     TipoDeDecisao.ANTECIPACAO,
     TipoDeDecisao.DEVOLUCAO,
     TipoDeDecisao.ERRO,
     TipoDeDecisao.CONCILIADO_FORA,
 )
-_DECISOES_DE_DUPLICIDADE = (TipoDeDecisao.MESMA_DIVIDA, TipoDeDecisao.DIVIDAS_DISTINTAS)
+DECISOES_DE_DUPLICIDADE = (TipoDeDecisao.MESMA_DIVIDA, TipoDeDecisao.DIVIDAS_DISTINTAS)
 _TITULO_COM_SISTEMA = re.compile(r"(?P<documento>.+?)\s*\((?P<sistema>[^()]+)\)")
 _CNPJ_OU_RAIZ = re.compile(r"[\d./\- ]+")
 
 
 @dataclass(frozen=True)
-class _LinhaDeDecisao:
-    aba: str
-    item: str
-    decisao: str
-    motivo: str = ""
-    titulos: str = ""
-    franqueado: str = ""
-    referencia: str = ""
+class _Autoria:
+    autor: str
+    momento: datetime
+    origem: str
 
 
 @dataclass(frozen=True)
@@ -71,7 +69,7 @@ class _WorkbookLido:
     execucao: object
     autor: str
     momento: datetime | None
-    linhas: tuple[_LinhaDeDecisao, ...]
+    linhas: tuple[LinhaDeDecisao, ...]
 
 
 @dataclass(frozen=True)
@@ -79,6 +77,7 @@ class DecisoesAplicadas:
     lidas: DecisoesLidas
     registradas: tuple[int, ...]
     duplicidades: tuple[int, ...] = ()
+    da_tela: tuple[int, ...] = ()
 
 
 class _NaoAplicada(Exception):
@@ -99,14 +98,10 @@ class _Interpretacao:
         armazenamento: Armazenamento,
         execucao: int,
         encargo: ParametrosDeEncargo,
-        autor: str,
-        momento: datetime,
     ) -> None:
         self._armazenamento = armazenamento
         self._execucao = execucao
         self._encargo = encargo
-        self._autor = autor
-        self._momento = momento
         resultado = armazenamento.carregar_resultado(execucao)
         self._lista = {item.identificador: item for item in resultado.lista_de_baixa}
         self._fila = {item.identificador: item for item in resultado.fila_de_excecoes}
@@ -121,20 +116,20 @@ class _Interpretacao:
         }
         self._nomes = {raiz: franqueado.todos_os_nomes for raiz, franqueado in armazenamento.franqueados().items()}
 
-    def interpretar(self, linha: _LinhaDeDecisao) -> _Decisao:
+    def interpretar(self, linha: LinhaDeDecisao, autoria: _Autoria) -> _Decisao:
         if linha.aba == ABA_DA_LISTA_DE_BAIXA:
-            return self._da_lista(linha)
+            return self._da_lista(linha, autoria)
         if linha.aba == ABA_DE_REVERSAO:
-            return self._reversao(linha)
+            return self._reversao(linha, autoria)
         if linha.item in self._fila:
-            return self._do_credito_da_fila(linha, self._fila[linha.item])
+            return self._do_credito_da_fila(linha, self._fila[linha.item], autoria)
         if linha.item in self._duplicidades:
-            return self._da_duplicidade(linha, self._duplicidades[linha.item])
+            return self._da_duplicidade(linha, self._duplicidades[linha.item], autoria)
         raise _NaoAplicada(
             f"Item {linha.item}: não está na Fila de exceções da execução {self._execucao}; decisão ignorada."
         )
 
-    def _da_lista(self, linha: _LinhaDeDecisao) -> _Decisao:
+    def _da_lista(self, linha: LinhaDeDecisao, autoria: _Autoria) -> _Decisao:
         item = self._lista.get(linha.item)
         if item is None:
             raise _NaoAplicada(
@@ -150,11 +145,11 @@ class _Interpretacao:
             if not linha.motivo:
                 raise _NaoAplicada(f"Item {linha.item}: rejeição sem motivo; não aplicada.")
             return _Decisao(
-                item.identificador, tipo, frozenset(), lambda: self._registrar(item, tipo, item.titulos, linha.motivo)
+                item.identificador, tipo, frozenset(), lambda: self._registrar(item, tipo, item.titulos, autoria, linha.motivo)
             )
-        return self._confirmacao(item, item.titulos)
+        return self._confirmacao(item, item.titulos, autoria)
 
-    def _reversao(self, linha: _LinhaDeDecisao) -> _Decisao:
+    def _reversao(self, linha: LinhaDeDecisao, autoria: _Autoria) -> _Decisao:
         confirmacao = self._armazenamento.confirmacao_em_vigor_do_item(linha.item)
         if confirmacao is None:
             raise _NaoAplicada(f"Item {linha.item}: não há confirmação em vigor para reverter; não aplicada.")
@@ -165,14 +160,14 @@ class _Interpretacao:
             TipoDeDecisao.REVERTER,
             frozenset(),
             lambda: self._armazenamento.registrar_reversao(
-                confirmacao, linha.motivo, self._autor, self._momento, ORIGEM_EXCEL
+                confirmacao, linha.motivo, autoria.autor, autoria.momento, autoria.origem
             ),
         )
 
-    def _do_credito_da_fila(self, linha: _LinhaDeDecisao, item: Item) -> _Decisao:
-        tipo = _tipo(linha.decisao, _DECISOES_DE_CREDITO_DA_FILA)
+    def _do_credito_da_fila(self, linha: LinhaDeDecisao, item: Item, autoria: _Autoria) -> _Decisao:
+        tipo = _tipo(linha.decisao, DECISOES_DE_CREDITO_DA_FILA)
         if tipo is None:
-            raise _NaoAplicada(_nao_reconhecida(linha, _DECISOES_DE_CREDITO_DA_FILA))
+            raise _NaoAplicada(_nao_reconhecida(linha, DECISOES_DE_CREDITO_DA_FILA))
         if tipo is TipoDeDecisao.CONFIRMAR:
             titulos = self._escolhidos(linha, self._abertos) if linha.titulos else item.titulos
             if not titulos:
@@ -182,17 +177,17 @@ class _Interpretacao:
                 raise _NaoAplicada(
                     f"Item {linha.item}: Título(s) {_descrever(fechados)} não está(ão) mais em aberto; não aplicada."
                 )
-            return self._confirmacao(item, titulos)
+            return self._confirmacao(item, titulos, autoria)
         if tipo is TipoDeDecisao.CONCILIADO_FORA:
-            return self._conciliado_fora(linha, item)
+            return self._conciliado_fora(linha, item, autoria)
         if item.motivo is not MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO:
             raise _NaoAplicada(
                 f"Item {linha.item}: '{tipo.value}' só classifica Crédito sem título em aberto, e o Motivo do item é "
                 f"'{item.motivo}'; não aplicada."
             )
-        return _Decisao(item.identificador, tipo, frozenset(), lambda: self._registrar(item, tipo, ()))
+        return _Decisao(item.identificador, tipo, frozenset(), lambda: self._registrar(item, tipo, (), autoria))
 
-    def _conciliado_fora(self, linha: _LinhaDeDecisao, item: Item) -> _Decisao:
+    def _conciliado_fora(self, linha: LinhaDeDecisao, item: Item, autoria: _Autoria) -> _Decisao:
         digitos = re.sub(r"\D", "", linha.franqueado)
         if not _CNPJ_OU_RAIZ.fullmatch(linha.franqueado) or len(digitos) not in (8, 14):
             raise _NaoAplicada(
@@ -203,16 +198,16 @@ class _Interpretacao:
             raise _NaoAplicada(f"Item {linha.item}: Conciliado fora exige a referência; não aplicada.")
 
         def registrar() -> int:
-            decisao = self._registrar(item, TipoDeDecisao.CONCILIADO_FORA, ())
+            decisao = self._registrar(item, TipoDeDecisao.CONCILIADO_FORA, (), autoria)
             self._armazenamento.registrar_conciliado_fora(decisao, digitos[:8], linha.referencia)
             return decisao
 
         return _Decisao(item.identificador, TipoDeDecisao.CONCILIADO_FORA, frozenset(), registrar)
 
-    def _da_duplicidade(self, linha: _LinhaDeDecisao, item: ItemDeTitulo) -> _Decisao:
-        tipo = _tipo(linha.decisao, _DECISOES_DE_DUPLICIDADE)
+    def _da_duplicidade(self, linha: LinhaDeDecisao, item: ItemDeTitulo, autoria: _Autoria) -> _Decisao:
+        tipo = _tipo(linha.decisao, DECISOES_DE_DUPLICIDADE)
         if tipo is None:
-            raise _NaoAplicada(_nao_reconhecida(linha, _DECISOES_DE_DUPLICIDADE))
+            raise _NaoAplicada(_nao_reconhecida(linha, DECISOES_DE_DUPLICIDADE))
         oficial: Titulo | None = None
         if tipo is TipoDeDecisao.MESMA_DIVIDA:
             escolhidos = self._escolhidos(linha, {_chave(titulo): titulo for titulo in item.titulos})
@@ -229,14 +224,14 @@ class _Interpretacao:
                 item=item.identificador,
                 tipo=tipo,
                 oficial=_chave(oficial) if oficial else None,
-                autor=self._autor,
-                momento=self._momento,
-                origem=ORIGEM_EXCEL,
+                autor=autoria.autor,
+                momento=autoria.momento,
+                origem=autoria.origem,
             )
 
         return _Decisao(item.identificador, tipo, outros, registrar)
 
-    def _confirmacao(self, item: Item, titulos: tuple[Titulo, ...]) -> _Decisao:
+    def _confirmacao(self, item: Item, titulos: tuple[Titulo, ...], autoria: _Autoria) -> _Decisao:
         devidos = tuple(replace(titulo, valor_centavos=self._saldos[_chave(titulo)]) for titulo in titulos)
         credito = item.lancamento
         if len(devidos) > 1 and credito.valor_centavos < sum(devido.valor_centavos for devido in devidos):
@@ -251,7 +246,9 @@ class _Interpretacao:
         }
 
         def registrar() -> int:
-            decisao = self._registrar(item, TipoDeDecisao.CONFIRMAR, titulos, encargos=encargos, principais=principais)
+            decisao = self._registrar(
+                item, TipoDeDecisao.CONFIRMAR, titulos, autoria, encargos=encargos, principais=principais
+            )
             self._vincular_pagador(decisao, item, titulos)
             return decisao
 
@@ -262,6 +259,7 @@ class _Interpretacao:
         item: Item,
         tipo: TipoDeDecisao,
         titulos: tuple[Titulo, ...],
+        autoria: _Autoria,
         motivo: str | None = None,
         encargos: Mapping[ChaveDoTitulo, int] | None = None,
         principais: Mapping[ChaveDoTitulo, int] | None = None,
@@ -271,9 +269,9 @@ class _Interpretacao:
             item=item.identificador,
             tipo=tipo,
             motivo=motivo,
-            autor=self._autor,
-            momento=self._momento,
-            origem=ORIGEM_EXCEL,
+            autor=autoria.autor,
+            momento=autoria.momento,
+            origem=autoria.origem,
             encargos=encargos if encargos is not None else {_chave(titulo): 0 for titulo in titulos},
             principais=principais,
         )
@@ -302,7 +300,7 @@ class _Interpretacao:
             or (TipoDeEvidencia.PAGADOR_CONHECIDO in evidencia and item.franqueado == franqueado)
         )
 
-    def _escolhidos(self, linha: _LinhaDeDecisao, entre: Mapping[ChaveDoTitulo, Titulo]) -> tuple[Titulo, ...]:
+    def _escolhidos(self, linha: LinhaDeDecisao, entre: Mapping[ChaveDoTitulo, Titulo]) -> tuple[Titulo, ...]:
         escolhidos: list[Titulo] = []
         for texto in (parte.strip() for parte in linha.titulos.split(";")):
             if not texto:
@@ -322,36 +320,110 @@ class _Interpretacao:
         return tuple(dict.fromkeys(escolhidos))
 
 
-def aplicar_decisoes_do_excel(
-    caminho: Path, armazenamento: Armazenamento, encargo: ParametrosDeEncargo, agora: datetime
+class DecisaoDaTelaRecusada(Exception):
+    pass
+
+
+class SemExecucaoParaDecidir(DecisaoDaTelaRecusada):
+    pass
+
+
+def registrar_decisao_da_tela(
+    armazenamento: Armazenamento, linha: LinhaDeDecisao, autor: str, momento: datetime
+) -> None:
+    execucao = _execucao_para_a_tela(armazenamento)
+    resultado = armazenamento.carregar_resultado(execucao)
+    if linha.aba == ABA_DA_LISTA_DE_BAIXA:
+        itens = {item.identificador for item in resultado.lista_de_baixa}
+    elif linha.aba == ABA_DA_FILA_DE_EXCECOES:
+        itens = {item.identificador for item in resultado.fila_de_excecoes} | {
+            item.identificador for item in resultado.itens_de_titulo
+        }
+    else:
+        raise DecisaoDaTelaRecusada(f"A tela não decide itens de '{linha.aba}'.")
+    if linha.item not in itens:
+        raise DecisaoDaTelaRecusada(f"Item {linha.item}: não está na {linha.aba} da execução {execucao}.")
+    if not linha.decisao.strip():
+        raise DecisaoDaTelaRecusada(f"Item {linha.item}: escolha uma decisão.")
+    if _tipo_da_lista(linha.decisao) is TipoDeDecisao.REJEITAR and not linha.motivo.strip():
+        raise DecisaoDaTelaRecusada(f"Item {linha.item}: a rejeição exige motivo.")
+    with armazenamento.transacao():
+        armazenamento.registrar_decisao_da_tela(execucao, linha, autor, momento)
+
+
+def confirmar_o_lote_pela_tela(armazenamento: Armazenamento, autor: str, momento: datetime) -> int:
+    execucao = _execucao_para_a_tela(armazenamento)
+    decididos = {p.linha.item for p in armazenamento.decisoes_da_tela_pendentes() if p.execucao == execucao}
+    a_confirmar = [
+        item.identificador
+        for item in armazenamento.carregar_resultado(execucao).lista_de_baixa
+        if item.identificador not in decididos
+    ]
+    with armazenamento.transacao():
+        for item in a_confirmar:
+            armazenamento.registrar_decisao_da_tela(
+                execucao, LinhaDeDecisao(ABA_DA_LISTA_DE_BAIXA, item, TipoDeDecisao.CONFIRMAR.value), autor, momento
+            )
+    return len(a_confirmar)
+
+
+def _execucao_para_a_tela(armazenamento: Armazenamento) -> int:
+    execucao = armazenamento.ultima_execucao()
+    if execucao is None:
+        raise SemExecucaoParaDecidir("Não há execução registrada; não há o que decidir.")
+    return execucao
+
+
+def aplicar_decisoes(
+    armazenamento: Armazenamento, encargo: ParametrosDeEncargo, agora: datetime, workbook: Path | None = None
 ) -> DecisoesAplicadas:
-    try:
-        lido = _ler(caminho)
-    except (OSError, KeyError, ValueError, BadZipFile, InvalidFileException) as erro:
-        return _nada_aplicado(f"O workbook {caminho.name} não pôde ser lido ({erro}); nenhuma decisão aplicada.")
     ultima = armazenamento.ultima_execucao()
-    if not lido.autor:
-        return _nada_aplicado(
-            f"O workbook {caminho.name} não foi salvo pela Analista (sem autor da última alteração); "
-            "nenhuma decisão aplicada."
-        )
-    if ultima is None or lido.execucao != ultima:
-        return _nada_aplicado(
-            f"O workbook {caminho.name} é da execução {lido.execucao}, mas a última execução é a execução {ultima}; "
-            "nenhuma decisão aplicada."
-        )
-    interpretacao = _Interpretacao(armazenamento, ultima, encargo, lido.autor, lido.momento or agora)
-    repetidos = {
-        chave for chave, vezes in Counter((linha.aba, linha.item) for linha in lido.linhas).items() if vezes > 1
-    }
     avisos: list[str] = []
+    do_excel: tuple[LinhaDeDecisao, ...] = ()
+    autoria_do_excel = _Autoria("", agora, ORIGEM_EXCEL)
+    if workbook is not None and workbook.exists():
+        try:
+            do_excel, autoria_do_excel = _linhas_do_excel(workbook, ultima, agora)
+        except _NaoAplicada as nao_aplicada:
+            avisos.append(str(nao_aplicada))
+    pendentes = armazenamento.decisoes_da_tela_pendentes()
+    da_tela: dict[str, LinhaDeDecisao] = {}
+    autorias_da_tela: dict[str, _Autoria] = {}
+    for pendente in pendentes:
+        if pendente.execucao != ultima:
+            avisos.append(
+                f"Item {pendente.linha.item}: decidido na tela sobre a execução {pendente.execucao}, mas a última "
+                f"execução é a execução {ultima}; não aplicada."
+            )
+            continue
+        da_tela[pendente.linha.item] = pendente.linha
+        autorias_da_tela[pendente.linha.item] = _Autoria(pendente.autor, pendente.momento, ORIGEM_TELA)
+    no_excel: dict[str, LinhaDeDecisao] = {}
+    for linha in do_excel:
+        no_excel.setdefault(linha.item, linha)
+    conflitos = tuple(
+        f"Item {item}: decidido no Excel ('{linha.decisao or 'vazio'}') e na tela ('{da_tela[item].decisao}') "
+        "desde a última execução; nenhuma das duas decisões aplicada."
+        for item, linha in no_excel.items()
+        if item in da_tela
+    )
+    linhas = [(linha, autoria_do_excel) for linha in do_excel if linha.item not in da_tela] + [
+        (linha, autorias_da_tela[item]) for item, linha in da_tela.items() if item not in no_excel
+    ]
+    lidas_da_tela = tuple(pendente.identificador for pendente in pendentes)
+    if ultima is None or not linhas:
+        return DecisoesAplicadas(DecisoesLidas(nao_aplicadas=tuple(avisos), conflitos=conflitos), (), (), lidas_da_tela)
+    interpretacao = _Interpretacao(armazenamento, ultima, encargo)
+    repetidos = {
+        chave for chave, vezes in Counter((linha.aba, linha.item) for linha, _ in linhas).items() if vezes > 1
+    }
     decisoes: list[_Decisao] = []
-    for linha in lido.linhas:
+    for linha, autoria in linhas:
         if (linha.aba, linha.item) in repetidos:
             avisos.append(f"Item {linha.item}: aparece mais de uma vez na aba {linha.aba}; decisão não aplicada.")
             continue
         try:
-            decisoes.append(interpretacao.interpretar(linha))
+            decisoes.append(interpretacao.interpretar(linha, autoria))
         except _NaoAplicada as nao_aplicada:
             avisos.append(str(nao_aplicada))
     usos = Counter(chave for decisao in decisoes for chave in decisao.usa)
@@ -363,10 +435,10 @@ def aplicar_decisoes_do_excel(
         if disputados:
             avisos.append(
                 f"Item {decisao.item}: Título(s) {_descrever_chaves(disputados)} usado(s) por mais de uma decisão "
-                "do workbook; nenhuma delas aplicada."
+                "desde a última execução; nenhuma delas aplicada."
             )
             continue
-        (duplicidades if decisao.tipo in _DECISOES_DE_DUPLICIDADE else registradas).append(decisao.registrar())
+        (duplicidades if decisao.tipo in DECISOES_DE_DUPLICIDADE else registradas).append(decisao.registrar())
         tipos.append(decisao.tipo)
     return DecisoesAplicadas(
         DecisoesLidas(
@@ -377,14 +449,32 @@ def aplicar_decisoes_do_excel(
             conciliados_fora=tipos.count(TipoDeDecisao.CONCILIADO_FORA),
             duplicidades=len(duplicidades),
             revertidas=tipos.count(TipoDeDecisao.REVERTER),
+            conflitos=conflitos,
         ),
         tuple(registradas),
         tuple(duplicidades),
+        lidas_da_tela,
     )
 
 
-def _nada_aplicado(aviso: str) -> DecisoesAplicadas:
-    return DecisoesAplicadas(DecisoesLidas(nao_aplicadas=(aviso,)), ())
+def _linhas_do_excel(
+    caminho: Path, ultima: int | None, agora: datetime
+) -> tuple[tuple[LinhaDeDecisao, ...], _Autoria]:
+    try:
+        lido = _ler(caminho)
+    except (OSError, KeyError, ValueError, BadZipFile, InvalidFileException) as erro:
+        raise _NaoAplicada(f"O workbook {caminho.name} não pôde ser lido ({erro}); nenhuma decisão aplicada.")
+    if not lido.autor:
+        raise _NaoAplicada(
+            f"O workbook {caminho.name} não foi salvo pela Analista (sem autor da última alteração); "
+            "nenhuma decisão aplicada."
+        )
+    if ultima is None or lido.execucao != ultima:
+        raise _NaoAplicada(
+            f"O workbook {caminho.name} é da execução {lido.execucao}, mas a última execução é a execução {ultima}; "
+            "nenhuma decisão aplicada."
+        )
+    return lido.linhas, _Autoria(lido.autor, lido.momento or agora, ORIGEM_EXCEL)
 
 
 def _tipo_da_lista(decisao: str) -> TipoDeDecisao | None:
@@ -405,7 +495,7 @@ def _sem_acento(texto: str) -> str:
     return " ".join("".join(c for c in decomposto if not unicodedata.combining(c)).lower().split())
 
 
-def _nao_reconhecida(linha: _LinhaDeDecisao, aceitos: Iterable[TipoDeDecisao]) -> str:
+def _nao_reconhecida(linha: LinhaDeDecisao, aceitos: Iterable[TipoDeDecisao]) -> str:
     opcoes = ", ".join(f"'{tipo.value}'" for tipo in aceitos)
     return f"Item {linha.item}: decisão '{linha.decisao}' não reconhecida (use {opcoes}); não aplicada."
 
@@ -461,7 +551,7 @@ def _ler(caminho: Path) -> _WorkbookLido:
         )
         reversoes = (
             tuple(
-                _LinhaDeDecisao(ABA_DE_REVERSAO, _celula(linha, 0), TipoDeDecisao.REVERTER.value, _celula(linha, 1))
+                LinhaDeDecisao(ABA_DE_REVERSAO, _celula(linha, 0), TipoDeDecisao.REVERTER.value, _celula(linha, 1))
                 for linha in livro[ABA_DE_REVERSAO].iter_rows(min_row=2, values_only=True)
                 if _celula(linha, 0)
             )
@@ -480,13 +570,13 @@ def _ler(caminho: Path) -> _WorkbookLido:
 
 def _linhas_da_aba(
     linhas: Iterable[tuple[object, ...]], aba: str, campos: Mapping[str, str]
-) -> tuple[_LinhaDeDecisao, ...]:
+) -> tuple[LinhaDeDecisao, ...]:
     cabecalho, *dados = linhas
     colunas = [str(c) for c in cabecalho]
     item, decisao = colunas.index(COLUNA_DO_ITEM), colunas.index(COLUNA_DA_DECISAO)
     indices = {campo: colunas.index(coluna) for campo, coluna in campos.items()}
     return tuple(
-        _LinhaDeDecisao(
+        LinhaDeDecisao(
             aba,
             _celula(linha, item),
             _celula(linha, decisao),

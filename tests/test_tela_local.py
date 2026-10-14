@@ -1,8 +1,10 @@
+import getpass
 import socket
 import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,7 +13,7 @@ import pytest
 from openpyxl import load_workbook
 
 from conciliacao.armazenamento import Armazenamento
-from conciliacao.dominio import MotivoDeNaoIdentificacao, Resultado
+from conciliacao.dominio import DecisaoRegistrada, MotivoDeNaoIdentificacao, Resultado, TipoDeDecisao
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.normalizacao import formatar_reais
 from conciliacao.saidas import gerar_workbook
@@ -297,3 +299,155 @@ def test_comando_sobe_a_tela_local_sobre_o_armazenamento(tmp_path: Path) -> None
     finally:
         processo.terminate()
         processo.wait(timeout=10)
+
+
+def _executar_e_fechar(pasta: Path, estado: Path, workbook: Path | None = None) -> Resultado:
+    armazenamento = Armazenamento(estado)
+    try:
+        resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso(), workbook)
+    finally:
+        armazenamento.fechar()
+    if workbook is not None:
+        gerar_workbook(resultado, workbook)
+    return resultado
+
+
+def _decisoes(estado: Path) -> dict[str, DecisaoRegistrada]:
+    armazenamento = Armazenamento(estado)
+    try:
+        return {decisao.item: decisao for decisao in armazenamento.decisoes()}
+    finally:
+        armazenamento.fechar()
+
+
+def _postar(endereco: str, caminho: str, campos: dict[str, str] | None = None) -> Elemento:
+    dados = urllib.parse.urlencode(campos or {}).encode("utf-8")
+    with urllib.request.urlopen(urllib.request.Request(endereco + caminho, data=dados, method="POST")) as resposta:
+        assert resposta.status == 200
+        assert resposta.url == endereco + "/"
+        return ler_pagina(resposta.read().decode("utf-8"))
+
+
+def _postar_recusado(endereco: str, caminho: str, campos: dict[str, str]) -> tuple[int, str]:
+    dados = urllib.parse.urlencode(campos).encode("utf-8")
+    with pytest.raises(urllib.error.HTTPError) as erro:
+        urllib.request.urlopen(urllib.request.Request(endereco + caminho, data=dados, method="POST"))
+    return erro.value.code, erro.value.read().decode("utf-8")
+
+
+def test_rejeitar_com_motivo_pela_tela_grava_pelo_mesmo_caminho_do_excel(
+    endereco: str, pasta: Path, estado: Path
+) -> None:
+    _cobranca_e_em_analise(pasta)
+    primeira = _executar_e_fechar(pasta, estado)
+    [na_lista] = primeira.lista_de_baixa
+
+    pagina = _postar(
+        endereco,
+        "/decidir",
+        {"aba": "Lista de baixa", "item": na_lista.identificador, "decisao": "rejeitar", "motivo": "não reconheço"},
+    )
+
+    [linha] = pagina.por_id("decidir-lista-de-baixa").linhas()[1:]
+    assert linha[0] == na_lista.identificador and "rejeitar" in linha[1] and "não reconheço" in linha[1]
+    segunda = _executar_e_fechar(pasta, estado)
+    decisao = _decisoes(estado)[na_lista.identificador]
+    assert (decisao.tipo, decisao.motivo, decisao.origem) == (TipoDeDecisao.REJEITAR, "não reconheço", "Tela")
+    assert decisao.autor == getpass.getuser()
+    assert decisao.titulos == na_lista.titulos and decisao.explicacao == na_lista.explicacao
+    assert segunda.lista_de_baixa == []
+    assert na_lista.identificador in [item.identificador for item in segunda.fila_de_excecoes]
+    assert segunda.resumo.decisoes.rejeitadas == 1
+
+
+def test_confirmar_o_lote_pela_tela_confirma_a_lista_de_baixa(endereco: str, pasta: Path, estado: Path) -> None:
+    _cobranca_e_em_analise(pasta)
+    primeira = _executar_e_fechar(pasta, estado)
+    [na_lista] = primeira.lista_de_baixa
+
+    pagina = _postar(endereco, "/confirmar-lote")
+
+    [linha] = pagina.por_id("decidir-lista-de-baixa").linhas()[1:]
+    assert "confirmar" in linha[1]
+    segunda = _executar_e_fechar(pasta, estado)
+    decisao = _decisoes(estado)[na_lista.identificador]
+    assert (decisao.tipo, decisao.origem) == (TipoDeDecisao.CONFIRMAR, "Tela")
+    assert segunda.lista_de_baixa == []
+    assert [baixa.titulo.documento for baixa in segunda.baixa_manual] == ["NF NA LISTA"]
+    assert segunda.resumo.decisoes.confirmadas == 1
+
+
+def test_resolver_item_da_fila_pela_tela(endereco: str, pasta: Path, estado: Path) -> None:
+    _cobranca_e_em_analise(pasta)
+    primeira = _executar_e_fechar(pasta, estado)
+    [na_fila] = primeira.fila_de_excecoes
+
+    _postar(
+        endereco,
+        "/decidir",
+        {
+            "aba": "Fila de exceções",
+            "item": na_fila.identificador,
+            "decisao": "confirmar",
+            "titulos": "NF NA FILA",
+            "franqueado": "",
+            "referencia": "",
+        },
+    )
+
+    segunda = _executar_e_fechar(pasta, estado)
+    decisao = _decisoes(estado)[na_fila.identificador]
+    assert (decisao.tipo, decisao.origem) == (TipoDeDecisao.CONFIRMAR, "Tela")
+    assert [titulo.documento for titulo in decisao.titulos] == ["NF NA FILA"]
+    assert segunda.fila_de_excecoes == []
+
+
+def test_a_tela_recusa_decisao_invalida_sem_gravar(endereco: str, pasta: Path, estado: Path) -> None:
+    _cobranca_e_em_analise(pasta)
+    primeira = _executar_e_fechar(pasta, estado)
+    [na_lista] = primeira.lista_de_baixa
+
+    status, corpo = _postar_recusado(
+        endereco, "/decidir", {"aba": "Lista de baixa", "item": na_lista.identificador, "decisao": "rejeitar"}
+    )
+    outro_status, _ = _postar_recusado(
+        endereco, "/decidir", {"aba": "Lista de baixa", "item": "não existe", "decisao": "confirmar"}
+    )
+
+    assert (status, outro_status) == (400, 400)
+    assert "motivo" in ler_pagina(corpo).por_id("recusa").texto
+    _executar_e_fechar(pasta, estado)
+    assert _decisoes(estado) == {}
+
+
+def test_sem_execucao_a_tela_nao_grava_decisao(endereco: str, estado: Path) -> None:
+    status, corpo = _postar_recusado(endereco, "/confirmar-lote", {})
+
+    assert status == 409
+    assert "Não há execução" in ler_pagina(corpo).por_id("recusa").texto
+    assert not estado.exists()
+
+
+def test_conflito_entre_excel_e_tela_aparece_na_tela_com_os_mesmos_totais_do_workbook(
+    endereco: str, pasta: Path, estado: Path, tmp_path: Path
+) -> None:
+    _cobranca_e_em_analise(pasta)
+    workbook = tmp_path / "conciliacao.xlsx"
+    primeira = _executar_e_fechar(pasta, estado, workbook)
+    [na_lista] = primeira.lista_de_baixa
+    livro = load_workbook(workbook)
+    livro.properties.lastModifiedBy = "Ana Analista"
+    livro.save(workbook)
+    _postar(endereco, "/confirmar-lote")
+
+    _executar_e_fechar(pasta, estado, workbook)
+
+    pagina = _abrir(endereco)
+    [conflito] = pagina.por_id("conflitos").todos("li")
+    assert na_lista.identificador in conflito.texto
+    resumo_do_workbook = [
+        [_texto_da_celula(c) for c in linha] for linha in load_workbook(workbook)["Resumo"].iter_rows(values_only=True)
+    ]
+    assert pagina.por_id("resumo").linhas() == resumo_do_workbook
+    assert ["Conflitos entre Excel e tela", "1"] in resumo_do_workbook
+    assert na_lista.identificador not in _decisoes(estado)
