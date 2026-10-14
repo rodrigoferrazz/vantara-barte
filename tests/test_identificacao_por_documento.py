@@ -169,3 +169,42 @@ def test_cnpjs_de_franqueados_diferentes_no_mesmo_historico_nao_identificam_o_pa
     assert resultado.lista_de_baixa == []
     [item] = resultado.fila_de_excecoes
     assert item.motivo is MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR
+
+
+@pytest.mark.parametrize(
+    ("historico", "documento"),
+    [
+        ("PIX RECEBIDO 12345678909", "12345678909"),
+        ("TED RECEBIDA CPF 123.456.789-09", "123.456.789-09"),
+        ("PIX RECEBIDO 99888777000166", "99888777000166"),
+        ("TED RECEBIDA CNPJ 99.888.777/0001-66", "99.888.777/0001-66"),
+    ],
+    ids=["cpf", "cpf com pontuacao", "cnpj desconhecido", "cnpj desconhecido com pontuacao"],
+)
+def test_cpf_ou_cnpj_de_raiz_desconhecida_vai_para_a_fila_sem_identificacao_do_pagador_sem_chamar_a_ia(
+    pasta: Path, armazenamento: Armazenamento, historico: str, documento: str
+) -> None:
+    escrever_protheus(pasta, [TituloProtheus(documento="NF 910091", valor="430,00", cnpj=CNPJ_MATRIZ)])
+    escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", historico, "430,00")])
+    nome_do_extrato = historico.removeprefix("PIX RECEBIDO ").removeprefix("TED RECEBIDA ")
+    parecerista = PareceristaFalso(sim_para=[(nome_do_extrato, "Franquia Teste Ltda")])
+
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), parecerista)
+
+    assert resultado.lista_de_baixa == []
+    [item] = resultado.fila_de_excecoes
+    assert item.motivo is MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR
+    assert [t.documento for t in item.titulos] == ["NF 910091"]
+    assert "".join(c for c in documento if c.isdigit()) in item.explicacao
+    assert item.pareceres == ()
+    assert parecerista.chamadas == []
+
+
+def test_cnpj_de_franqueado_identifica_mesmo_com_cpf_no_historico(pasta: Path, armazenamento: Armazenamento) -> None:
+    escrever_protheus(pasta, [TituloProtheus(documento="NF 910101", valor="390,00", cnpj=CNPJ_MATRIZ)])
+    escrever_extrato_itau(pasta, [LinhaItau("10/03/2025", "TED 10200300000140 CPF 12345678909", "390,00")])
+
+    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
+
+    [item] = resultado.lista_de_baixa
+    assert [t.documento for t in item.titulos] == ["NF 910101"]

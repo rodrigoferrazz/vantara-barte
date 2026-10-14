@@ -12,6 +12,7 @@ from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escreve
 from tests.parecerista import PareceristaFalso
 
 NOSSO_NUMERO = "000077700011"
+JUROS_DE_1_POR_CENTO = ParametrosDeEncargo(juros_ao_mes_percentual=Decimal("1"))
 
 
 def _pagar_por_nosso_numero(
@@ -22,7 +23,7 @@ def _pagar_por_nosso_numero(
     vencimento: str,
     data: str,
     valor_pago: str,
-    encargo: ParametrosDeEncargo = ParametrosDeEncargo(),
+    encargo: ParametrosDeEncargo = JUROS_DE_1_POR_CENTO,
 ) -> Resultado:
     escrever_protheus(
         pasta,
@@ -186,7 +187,7 @@ def test_tolerancia_amplia_o_encargo_previsto(
         vencimento="10/03/2025",
         data="20/03/2025",
         valor_pago=valor_pago,
-        encargo=ParametrosDeEncargo(tolerancia_centavos=50),
+        encargo=ParametrosDeEncargo(juros_ao_mes_percentual=Decimal("1"), tolerancia_centavos=50),
     )
 
     assert len(resultado.lista_de_baixa) == (1 if na_lista else 0)
@@ -200,7 +201,7 @@ def test_tolerancia_nao_vale_para_pagamento_em_dia(pasta: Path, armazenamento: A
         vencimento="10/03/2025",
         data="10/03/2025",
         valor_pago="10.000,10",
-        encargo=ParametrosDeEncargo(tolerancia_centavos=50),
+        encargo=ParametrosDeEncargo(juros_ao_mes_percentual=Decimal("1"), tolerancia_centavos=50),
     )
 
     assert _na_fila(resultado).motivo is MotivoDeNaoIdentificacao.VALOR_NAO_FECHA
@@ -297,6 +298,14 @@ def test_sem_secao_de_encargo_vale_a_multa_padrao_de_2_por_cento(tmp_path: Path)
     configuracao = carregar_configuracao(_configuracao_em_arquivo(tmp_path, ""))
 
     assert configuracao.encargo.multa_percentual == Decimal("2")
+
+
+def test_sem_juros_na_configuracao_os_juros_sao_zero(tmp_path: Path) -> None:
+    sem_secao = carregar_configuracao(_configuracao_em_arquivo(tmp_path, ""))
+    so_multa = carregar_configuracao(_configuracao_em_arquivo(tmp_path, "[encargo]\nmulta_percentual = 2\n"))
+
+    assert sem_secao.encargo.juros_ao_mes_percentual == Decimal("0")
+    assert so_multa.encargo.juros_ao_mes_percentual == Decimal("0")
 
 
 @pytest.mark.parametrize(

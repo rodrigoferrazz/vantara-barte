@@ -13,7 +13,7 @@ _DIAS_DO_MES_COMERCIAL = 30
 @dataclass(frozen=True)
 class ParametrosDeEncargo:
     multa_percentual: Decimal = Decimal("2")
-    juros_ao_mes_percentual: Decimal = Decimal("1")
+    juros_ao_mes_percentual: Decimal = Decimal("0")
     tolerancia_centavos: int = 0
 
 

@@ -232,3 +232,99 @@ def test_parecer_e_exibido_no_item_da_fila_do_workbook_com_modelo_e_versao_do_pr
     assert linha["Evidência"] == TipoDeEvidencia.PARECER_DE_LLM.value
     resumo = {valores[0]: valores[1] for valores in workbook["Resumo"].iter_rows(values_only=True)}
     assert "funcionando" in str(resumo["IA (parecer de nome)"])
+
+
+PIX_PREFIXO_DE_A = "PIX RECEBIDO CONFEITARIA ALVORADA CO"
+NOME_PREFIXO_DE_A = "CONFEITARIA ALVORADA CO"
+
+
+def test_nome_por_prefixo_de_outro_franqueado_chama_a_ia_sobre_o_franqueado_candidato(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    _dois_franqueados(pasta, valor_a="3.200,00", valor_b="1.000,00")
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", PIX_PREFIXO_DE_A, "1.000,00")])
+    parecerista = PareceristaFalso(sim_para=[(NOME_PREFIXO_DE_A, NOME_B)])
+
+    item = _unico_da_fila(_executar(pasta, armazenamento, parecerista))
+
+    assert parecerista.chamadas == [(NOME_PREFIXO_DE_A, (NOME_B,))]
+    assert item.motivo is MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ
+    assert [t.documento for t in item.titulos] == ["NF 2"]
+    assert item.evidencia == (TipoDeEvidencia.PARECER_DE_LLM,)
+    [parecer] = item.pareceres
+    assert parecer.franqueado == "20400600"
+
+
+def test_parecer_negativo_sobre_o_candidato_mantem_o_nome_por_prefixo_do_outro_franqueado(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    _dois_franqueados(pasta, valor_a="3.200,00", valor_b="1.000,00")
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", PIX_PREFIXO_DE_A, "1.000,00")])
+
+    item = _unico_da_fila(_executar(pasta, armazenamento, PareceristaFalso()))
+
+    assert item.motivo is MotivoDeNaoIdentificacao.VALOR_NAO_FECHA
+    assert [t.documento for t in item.titulos] == ["NF 1"]
+    assert item.evidencia == (TipoDeEvidencia.NOME_POR_PREFIXO,)
+    [parecer] = item.pareceres
+    assert parecer.parecer.resposta is Resposta.NAO
+    assert "não lembra" in item.explicacao
+
+
+def test_valor_que_fecha_com_o_franqueado_do_prefixo_e_com_outro_chama_a_ia_sobre_o_outro(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    _dois_franqueados(pasta, valor_a="3.200,00", valor_b="3.200,00")
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", PIX_PREFIXO_DE_A, "3.200,00")])
+    parecerista = PareceristaFalso()
+
+    item = _unico_da_fila(_executar(pasta, armazenamento, parecerista))
+
+    assert parecerista.chamadas == [(NOME_PREFIXO_DE_A, (NOME_B,))]
+    assert item.motivo is MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ
+    assert [t.documento for t in item.titulos] == ["NF 1"]
+    assert item.evidencia == (TipoDeEvidencia.NOME_POR_PREFIXO,)
+    assert len(item.pareceres) == 1
+
+
+def test_parecer_positivo_sobre_o_outro_candidato_com_nome_por_prefixo_vira_nome_ambiguo(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    _dois_franqueados(pasta, valor_a="3.200,00", valor_b="3.200,00")
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", PIX_PREFIXO_DE_A, "3.200,00")])
+    parecerista = PareceristaFalso(sim_para=[(NOME_PREFIXO_DE_A, NOME_B)])
+
+    item = _unico_da_fila(_executar(pasta, armazenamento, parecerista))
+
+    assert item.motivo is MotivoDeNaoIdentificacao.NOME_AMBIGUO
+    assert item.titulos == ()
+    assert item.evidencia == (TipoDeEvidencia.NOME_POR_PREFIXO, TipoDeEvidencia.PARECER_DE_LLM)
+
+
+def test_ia_indisponivel_sobre_o_candidato_deixa_o_item_sem_identificacao_do_pagador(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    _dois_franqueados(pasta, valor_a="3.200,00", valor_b="1.000,00")
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", PIX_PREFIXO_DE_A, "1.000,00")])
+
+    item = _unico_da_fila(_executar(pasta, armazenamento, PareceristaFalso(indisponivel=True)))
+
+    assert item.ia_indisponivel
+    assert item.motivo is MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR
+    assert [t.documento for t in item.titulos] == ["NF 2"]
+    assert item.evidencia == (TipoDeEvidencia.SO_VALOR,)
+
+
+def test_nome_por_prefixo_de_um_nome_do_candidato_em_outro_sistema_de_origem_nao_chama_a_ia(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    _dois_franqueados(pasta, valor_a="3.200,00", valor_b="1.000,00")
+    escrever_omie(pasta, [TituloOmie(documento="OM 1", valor="50.00", cliente="Merc Horiz Comercial", cnpj="20400600000180")])
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO MERC HORIZ", "1.000,00")])
+    parecerista = PareceristaFalso()
+
+    item = _unico_da_fila(_executar(pasta, armazenamento, parecerista))
+
+    assert parecerista.chamadas == []
+    assert item.motivo is MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ
+    assert [t.documento for t in item.titulos] == ["NF 2"]

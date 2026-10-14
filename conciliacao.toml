@@ -5,10 +5,11 @@ padrao = "*extrato_bancario*.csv"
 banco = "itau"
 conta = "conta-principal-cobranca"
 
-# Encargo por atraso, contado a partir do Vencimento efetivo. Multa de 2% é premissa ainda não confirmada pelo contrato.
+# Encargo por atraso, contado a partir do Vencimento efetivo. Multa de 2% e juros zero são premissas ainda não
+# confirmadas pelo contrato.
 [encargo]
 multa_percentual = 2
-juros_ao_mes_percentual = 1
+juros_ao_mes_percentual = 0
 tolerancia_reais = 0.00
 
 # Busca de somas de Títulos do mesmo Franqueado: quantas combinações examinar por Crédito antes de desistir.

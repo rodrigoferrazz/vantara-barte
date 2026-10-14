@@ -85,6 +85,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** o histórico é varrido por CNPJs com pontuação completa ou com 14 dígitos seguidos, sem fazer parte de um número maior. Um CNPJ identifica o Franqueado quando sua raiz é a de algum Título já visto; CNPJ de raiz desconhecida é ignorado. Se os CNPJs conhecidos do histórico apontam para mais de um Franqueado, o Crédito vai para a Fila como "sem identificação do pagador". CPF ainda não é procurado: só identifica quando for Pagador conhecido confirmado pela Analista (ticket 13).
 - **Por quê:** a raiz liga matriz e filiais (CONTEXT, Franqueado); com dois Franqueados a plataforma estaria escolhendo; não há CPF de Pagador conhecido antes das confirmações.
 - **Alternativas:** usar o primeiro CNPJ do histórico; aceitar CNPJ parcialmente pontuado; procurar CPF já agora sem ter com o que comparar.
+- **Substituída:** ver Correção: CPF ou CNPJ desconhecido no histórico
 
 ## Ticket 03: precedência entre nosso número e CNPJ
 
@@ -117,6 +118,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** atraso é a diferença em dias corridos entre a data do Crédito no Extrato e o Vencimento efetivo. Com atraso, Encargo previsto = multa sobre o valor do Título + juros ao mês pro rata (dias de atraso / 30), cada parcela arredondada ao centavo (meio para cima). Padrões: multa 2%, juros 1% ao mês, tolerância R$ 0,00, em `[encargo]` do `conciliacao.toml` (`multa_percentual`, `juros_ao_mes_percentual`, `tolerancia_reais`); campo desconhecido, negativo, não numérico ou tolerância com fração de centavo recusam a configuração.
 - **Por quê:** a spec só fixa a multa de 2%; juros de 1% ao mês é o usual em contrato e a tolerância zero só manda para a Lista o que a regra explica. A data do Crédito é a única data de pagamento que o Extrato traz.
 - **Alternativas:** juros de 0% (todo pagamento com juros iria para a Fila); juros compostos ou por dias úteis; contar o atraso do vencimento original.
+- **Substituída:** ver Correção: juros zero por padrão
 
 ## Ticket 04: faixa que fecha com o Título
 
@@ -223,6 +225,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** a IA só é chamada para Crédito com nome do pagador que não é Nome por prefixo de nenhum Franqueado. Os candidatos são os Franqueados com que o valor fecha pela mesma busca da identificação por nome: Título sozinho considerando o Encargo, soma exata de Títulos do Franqueado, ou limite da busca atingido. A IA recebe o nome do Extrato e todos os nomes do candidato em todos os Sistemas de origem, uma chamada por candidato. Sem candidato, não há chamada e o Crédito segue como "sem identificação do pagador". Nome que é prefixo de algum Franqueado continua no caminho do ticket 06, sem IA, mesmo quando o valor fecha só com outro Franqueado.
 - **Por quê:** a spec manda filtrar por valor antes do parecer e restringir somas ao mesmo Franqueado; reutilizar a busca do ticket 07 mantém as duas identificações coerentes. Manter o caminho do prefixo preserva a precedência já decidida no ticket 06 ("valor não fecha" antes de qualquer outro Motivo).
 - **Alternativas:** perguntar à IA sobre todos os Franqueados (custo e risco de a IA escolher entre muitos); chamar a IA também quando o nome é prefixo de um Franqueado cujo valor não fecha.
+- **Substituída:** ver Correção: IA chamada por Franqueado candidato
 
 ## Ticket 08: destino conforme o parecer
 
@@ -585,3 +588,20 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** decisão do usuário ("segue a spec"). A história 46 (spec linha 91) restringe "em análise" a Títulos com Crédito candidato na Fila; a história 43 (spec linha 178, "sem Crédito candidato confirmado ou em análise") tira da cobrança também o Título proposto na Lista. A amostra passa a dar os 9 Títulos em análise da spec.
 - **Alternativas:** manter a Lista em "em análise" (regra anterior); devolver à cobrança o Título proposto na Lista (cobraria quem já pagou).
 
+## Correção: IA chamada por Franqueado candidato
+
+- **Decisão:** Franqueado candidato é o Franqueado, agrupado pela raiz do CNPJ, com que o valor do Crédito fecha (Título sozinho considerando o Encargo, soma exata ou limite da busca atingido). Para cada Franqueado candidato, o nome do Extrato é comparado por prefixo com todos os nomes desse Franqueado em todos os Sistemas de origem; a IA é chamada, uma vez por candidato, só para os candidatos de que o nome não é Nome por prefixo. Se nenhum candidato precisa de IA, segue o caminho do Nome por prefixo (ticket 06) ou, sem Nome por prefixo, o de só valor. Quando a IA é chamada, os Franqueados com o nome confirmado são os candidatos por Nome por prefixo mais os candidatos com parecer "sim", e o destino segue o do ticket 08: um só, "pagador provável, primeira vez" com a opção dele (ou "mais de uma combinação possível"); mais de um, "nome ambíguo" sem sugestão; IA indisponível em algum candidato, "sem identificação do pagador" com a sugestão por valor entre todos os candidatos, marcado "IA indisponível". A evidência é nome por prefixo, parecer de LLM ou os dois, conforme de onde veio cada Franqueado confirmado. Com todos os pareceres "não" e o nome sendo Nome por prefixo de algum Franqueado com que o valor não fecha, vale o caminho do Nome por prefixo ("valor não fecha" ou "Crédito sem título em aberto", ver a correção de Título candidato), com os pareceres guardados no item e citados na explicação.
+- **Por quê:** decisão do usuário ("compara com todos os nomes do Franqueado candidato, pelo CNPJ"). A história 30 (spec linha 69), a regra de decisão da spec (linha 176) e o Parecerista de nome (linha 164) mandam chamar a IA quando o nome não é prefixo de nenhum nome do Franqueado candidato, já filtrado por valor; a regra anterior deixava de chamar a IA sempre que o nome era prefixo de qualquer Franqueado, mesmo que o valor só fechasse com outro. O caso de pareceres "não" com Nome por prefixo de outro Franqueado não está na spec: o Nome por prefixo é identificação por regra e a precedência da história 39 põe "valor não fecha" e "Crédito sem título em aberto" antes dos outros Motivos, por isso ele prevalece sobre a história 33, que trata do nome que só a IA poderia identificar.
+- **Alternativas:** manter a regra anterior (contra a spec); com pareceres "não" e Nome por prefixo de outro Franqueado, mandar para "sem identificação do pagador" com a sugestão por valor (ignoraria a identificação por regra); com IA indisponível, usar o Nome por prefixo do candidato e ignorar o candidato sem parecer (um "sim" não dado ainda tornaria o nome ambíguo).
+
+## Correção: CPF ou CNPJ desconhecido no histórico
+
+- **Decisão:** o histórico passa a ser varrido também por CPF (`000.000.000-00` ou 11 dígitos seguidos, sem fazer parte de um número maior). Sem CNPJ de Franqueado conhecido no histórico, o Crédito cujo histórico traz CPF ou CNPJ de raiz desconhecida vai para a Fila como "sem identificação do pagador", sem procurar Pagador conhecido pelo nome, Nome por prefixo nem parecer da IA; a sugestão é a de só valor (um Título em aberto com que o valor fecha, entre todos) e a explicação cita o documento. CNPJ de Franqueado conhecido no histórico continua identificando, mesmo com CPF ou outro CNPJ desconhecido junto. As histórias 12 e 13 (aprender CPF e CNPJ de filial como Pagador conhecido) ficam fora por ora, por decisão do usuário: até lá, nenhum CPF identifica.
+- **Por quê:** decisão do usuário (Crédito cujo histórico traz CPF, ou CNPJ cuja raiz não pertence a nenhum Franqueado conhecido, vai para a Fila com Motivo "sem identificação do pagador"). O documento diz quem pagou e não é Franqueado; procurar o nome no resto do histórico ou perguntar à IA tentaria contrariar o documento. A sugestão por valor segue a história 18 (spec linha 54).
+- **Alternativas:** sem sugestão por valor; deixar o documento desconhecido de lado e seguir pelo nome (regra anterior); tratar CPF só quando pontuado (11 dígitos seguidos são como o banco escreve CNPJ sem pontuação, a amostra mostra esse formato).
+
+## Correção: juros zero por padrão
+
+- **Decisão:** o padrão de `juros_ao_mes_percentual` passa a ser 0, no código (`ParametrosDeEncargo`) e no `conciliacao.toml`. Sem juros configurados, o Encargo previsto é só a multa; qualquer valor entre o Título e o Título + multa + tolerância continua fechando como Encargo pago. Os testes que exercitam o cálculo de juros passam juros de 1% explicitamente.
+- **Por quê:** decisão do usuário ("juros ao mês fica em zero, como a gente decidiu"). A spec (linhas 162 e 211) só fixa a multa de 2% e deixa os juros do contrato como ponto aberto com o cliente.
+- **Alternativas:** manter 1% ao mês (regra anterior); juros sem padrão, obrigatório na configuração.

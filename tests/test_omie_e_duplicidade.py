@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ from openpyxl import load_workbook
 
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.dominio import MotivoDeNaoIdentificacao
+from conciliacao.encargo import ParametrosDeEncargo
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.saidas import gerar_workbook
 from tests.arquivos import (
@@ -49,8 +51,11 @@ def test_exportacao_omie_e_lida_como_vem_e_casa_por_cnpj_como_o_protheus(
 def test_atraso_em_titulo_do_omie_usa_o_vencimento_iso(pasta: Path, armazenamento: Armazenamento) -> None:
     escrever_omie(pasta, [TituloOmie(documento="FAT-2025-0003", valor="1000.00", vencimento="2025-03-05")])
     escrever_extrato_itau(pasta, [LinhaItau("14/03/2025", "PIX RECEBIDO 10200300000140", "1.023,00")])
+    juros_de_1_por_cento = ParametrosDeEncargo(juros_ao_mes_percentual=Decimal("1"))
 
-    resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
+    resultado = executar_conciliacao(
+        pasta, armazenamento, configuracao_itau(encargo=juros_de_1_por_cento), PareceristaFalso()
+    )
 
     [item] = resultado.lista_de_baixa
     assert [t.documento for t in item.titulos] == ["FAT-2025-0003"]

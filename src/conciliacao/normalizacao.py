@@ -11,6 +11,7 @@ _CNPJ_SEM_PONTUACAO = re.compile(r"\d{14}")
 _CNPJ = r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14}"
 _CNPJ_INTEIRO = re.compile(_CNPJ)
 _CNPJ_NO_TEXTO = re.compile(rf"(?<![\d./-])(?:{_CNPJ})(?![\d./-]*\d)")
+_CPF_NO_TEXTO = re.compile(r"(?<![\d./-])(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})(?![\d./-]*\d)")
 
 
 class FormatoInvalido(ValueError):
@@ -71,6 +72,10 @@ def cnpj_sem_pontuacao(texto: str) -> str:
 
 def cnpjs_no_texto(texto: str) -> list[str]:
     return [_so_digitos(encontrado) for encontrado in _CNPJ_NO_TEXTO.findall(texto)]
+
+
+def cpfs_no_texto(texto: str) -> list[str]:
+    return [_so_digitos(encontrado) for encontrado in _CPF_NO_TEXTO.findall(texto)]
 
 
 def raiz_do_cnpj(cnpj: str) -> str:
