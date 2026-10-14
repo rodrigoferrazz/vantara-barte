@@ -1,7 +1,7 @@
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 
 from conciliacao.dominio import (
     Canal,
@@ -18,17 +18,19 @@ from conciliacao.dominio import (
     RegraDaProposta,
     PossivelDuplicidade,
     Resposta,
+    TipoDeDecisao,
     TipoDeEvidencia,
     Titulo,
     TituloNaCobranca,
 )
 from conciliacao.calendario import somar_dias_uteis, vencimento_efetivo
-from conciliacao.encargo import Pagamento, ParametrosDeEncargo, enquadrar
+from conciliacao.encargo import CreditoEnquadrado, ParametrosDeEncargo, enquadrar
 from conciliacao.normalizacao import cnpjs_no_texto, cpfs_no_texto, formatar_reais, nome_normalizado, raiz_do_cnpj
 from conciliacao.parecerista import PareceristaDeNome
 
 type NomeDoPagador = Callable[[Lancamento], str | None]
 type CanalDoCredito = Callable[[Lancamento], Canal]
+type Motor = Callable[..., list[Classificacao]]
 
 _DIAS_UTEIS_DE_COMPENSACAO_DO_BOLETO = 2
 
@@ -43,19 +45,19 @@ class _NomeDoFranqueado:
 
 @dataclass(frozen=True)
 class _Opcao:
-    titulos: tuple[tuple[Titulo, Pagamento], ...]
+    titulos: tuple[tuple[Titulo, CreditoEnquadrado], ...]
 
     def descrever(self) -> str:
         if len(self.titulos) == 1:
-            [(titulo, pagamento)] = self.titulos
-            return f"Título {titulo.documento} ({titulo.sistema_de_origem}), {pagamento.descrever()}"
+            [(titulo, enquadrado)] = self.titulos
+            return f"Título {titulo.documento} ({titulo.sistema_de_origem}), {enquadrado.descrever()}"
         parcelas = " + ".join(
             f"{titulo.documento} ({titulo.sistema_de_origem}, {formatar_reais(titulo.valor_centavos)})"
             for titulo, _ in self.titulos
         )
         soma = formatar_reais(sum(titulo.valor_centavos for titulo, _ in self.titulos))
-        pagamentos = "; ".join(f"{titulo.documento} {pagamento.descrever()}" for titulo, pagamento in self.titulos)
-        return f"soma exata dos Títulos {parcelas} = {soma} ({pagamentos})"
+        enquadrados = "; ".join(f"{titulo.documento} {enquadrado.descrever()}" for titulo, enquadrado in self.titulos)
+        return f"soma exata dos Títulos {parcelas} = {soma} ({enquadrados})"
 
 
 @dataclass(frozen=True)
@@ -106,15 +108,15 @@ class _Titulos:
     def nomes_do_franqueado(self, raiz: str) -> list[str]:
         return sorted({nome.nome for nome in self.nomes if nome.raiz == raiz})
 
-    def que_fecham(self, titulos: list[Titulo], lancamento: Lancamento) -> list[tuple[Titulo, Pagamento]]:
+    def que_fecham(self, titulos: list[Titulo], lancamento: Lancamento) -> list[tuple[Titulo, CreditoEnquadrado]]:
         return [
-            (titulo, pagamento)
+            (titulo, enquadrado)
             for titulo in titulos
-            if (pagamento := enquadrar(titulo, lancamento.valor_centavos, lancamento.data, self.encargo)).fecha
+            if (enquadrado := enquadrar(titulo, lancamento.valor_centavos, lancamento.data, self.encargo)).fecha
         ]
 
     def buscar(self, titulos: list[Titulo], lancamento: Lancamento) -> _Busca:
-        opcoes = [_Opcao(((titulo, pagamento),)) for titulo, pagamento in self.que_fecham(titulos, lancamento)]
+        opcoes = [_Opcao(((titulo, enquadrado),)) for titulo, enquadrado in self.que_fecham(titulos, lancamento)]
         limite_atingido = False
         if len(opcoes) < 2:
             somas, limite_atingido = _somas_exatas(
@@ -174,6 +176,10 @@ def conciliar(
     parecerista: PareceristaDeNome,
     pares_rejeitados: Iterable[ParRejeitado] = (),
     pagadores_conhecidos: Iterable[PagadorConhecido] = (),
+    *,
+    antecipacoes: Mapping[ChaveNatural, datetime],
+    fontes_nao_integradas: Mapping[ChaveNatural, datetime],
+    divergencias: Mapping[ChaveNatural, list[str]],
 ) -> list[Classificacao]:
     todos = list(titulos)
     nomes = _nomes_dos_franqueados(franqueados, todos)
@@ -210,9 +216,71 @@ def conciliar(
         restantes = [titulo for titulo in todos if not any(par.rejeita(titulo) for par in pares)]
         return _apos_rejeicao(_classificar(lancamento, abertos(restantes)), pares)
 
-    return _sem_titulo_disputado_na_lista(
+    classificacoes = _sem_titulo_disputado_na_lista(
         [_com_canal(classificar(lancamento), canal_do_credito) for lancamento in lancamentos]
     )
+    return _com_divergencias(
+        _com_classificacoes_da_analista(classificacoes, antecipacoes, fontes_nao_integradas), divergencias
+    )
+
+
+def _com_classificacoes_da_analista(
+    classificacoes: list[Classificacao],
+    antecipacoes: Mapping[ChaveNatural, datetime],
+    fontes_nao_integradas: Mapping[ChaveNatural, datetime],
+) -> list[Classificacao]:
+    return [
+        _como_fonte_nao_integrada(_como_antecipacao(c, antecipacoes), fontes_nao_integradas) for c in classificacoes
+    ]
+
+
+def _como_antecipacao(c: Classificacao, antecipacoes: Mapping[ChaveNatural, datetime]) -> Classificacao:
+    momento = antecipacoes.get(c.lancamento.chave_natural)
+    if momento is None:
+        return c
+    return replace(
+        c,
+        explicacao=f"{c.explicacao} Classificado pela Analista como {TipoDeDecisao.ANTECIPACAO.value} "
+        f"em {momento:%d/%m/%Y}; o Crédito continua vivo e é retentado a cada nova importação.",
+    )
+
+
+def _como_fonte_nao_integrada(c: Classificacao, fontes: Mapping[ChaveNatural, datetime]) -> Classificacao:
+    momento = fontes.get(c.lancamento.chave_natural)
+    if momento is None or c.destino is not Destino.FILA_DE_EXCECOES:
+        return c
+    fonte = MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA
+    return replace(
+        c,
+        motivo=fonte,
+        explicacao=f"{c.explicacao} Classificado pela Analista como {fonte.value} em {momento:%d/%m/%Y} "
+        f"(o motor apontava '{c.motivo}'); o Crédito continua vivo e é retentado a cada nova importação.",
+    )
+
+
+def _com_divergencias(
+    classificacoes: list[Classificacao], divergencias: Mapping[ChaveNatural, list[str]]
+) -> list[Classificacao]:
+    com_divergencia = []
+    for c in classificacoes:
+        explicacoes = divergencias.get(c.lancamento.chave_natural)
+        if not explicacoes:
+            com_divergencia.append(c)
+            continue
+        explicacao = " ".join((c.explicacao, *explicacoes))
+        if c.destino is Destino.LISTA_DE_BAIXA:
+            com_divergencia.append(
+                replace(
+                    c,
+                    destino=Destino.FILA_DE_EXCECOES,
+                    explicacao=explicacao,
+                    motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+                    regra=None,
+                )
+            )
+        else:
+            com_divergencia.append(replace(c, explicacao=explicacao))
+    return com_divergencia
 
 
 def _apos_rejeicao(classificacao: Classificacao, pares: list[ParRejeitado]) -> Classificacao:
@@ -273,7 +341,7 @@ def _nomes_dos_franqueados(franqueados: Iterable[Franqueado], titulos: list[Titu
         for franqueado in franqueados
         for sistema, nomes_no_sistema in franqueado.nomes.items()
         for nome in nomes_no_sistema
-    } | {(titulo.franqueado, titulo.sistema_de_origem, titulo.cliente) for titulo in titulos}
+    } | {(titulo.franqueado, titulo.sistema_de_origem, titulo.nome_do_franqueado) for titulo in titulos}
     return [_NomeDoFranqueado(raiz, sistema, nome, nome_normalizado(nome)) for raiz, sistema, nome in sorted(nomes)]
 
 
@@ -465,13 +533,13 @@ def _por_nome(
     def fila(
         motivo: MotivoDeNaoIdentificacao,
         explicacao: str,
-        sugeridos: tuple[Titulo, ...],
+        titulos_candidatos: tuple[Titulo, ...],
         citados: tuple[Titulo, ...] = (),
     ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             destino=Destino.FILA_DE_EXCECOES,
-            titulos=sugeridos,
+            titulos=titulos_candidatos,
             explicacao=f"{identificacao}; {explicacao}.",
             motivo=motivo,
             evidencia=(TipoDeEvidencia.NOME_POR_PREFIXO,),
@@ -558,13 +626,13 @@ def _por_parecer(
         motivo: MotivoDeNaoIdentificacao,
         explicacao: str,
         evidencia: tuple[TipoDeEvidencia, ...],
-        sugeridos: tuple[Titulo, ...] = (),
+        titulos_candidatos: tuple[Titulo, ...] = (),
         citados: tuple[Titulo, ...] = (),
     ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             destino=Destino.FILA_DE_EXCECOES,
-            titulos=sugeridos,
+            titulos=titulos_candidatos,
             explicacao=f"{identificacao}. {explicacao}.",
             motivo=motivo,
             evidencia=evidencia,
@@ -645,11 +713,11 @@ def _so_valor(lancamento: Lancamento, pagador: str, abertos: _Titulos) -> Classi
             (TipoDeEvidencia.SO_VALOR,),
             citados=tuple(titulo for titulo, _ in que_fecham),
         )
-    [(titulo, pagamento)] = que_fecham
+    [(titulo, enquadrado)] = que_fecham
     return _sem_identificacao(
         lancamento,
         f"{pagador}; só o valor {valor} aponta o Título {titulo.documento} ({titulo.sistema_de_origem}) "
-        f"do Franqueado {titulo.cliente}, {pagamento.descrever()}.",
+        f"do Franqueado {titulo.nome_do_franqueado}, {enquadrado.descrever()}.",
         (TipoDeEvidencia.SO_VALOR,),
         (titulo,),
     )
@@ -669,14 +737,14 @@ def _por_pagador_identificado(
     def fila(
         motivo: MotivoDeNaoIdentificacao,
         explicacao: str,
-        sugeridos: tuple[Titulo, ...] = (),
+        titulos_candidatos: tuple[Titulo, ...] = (),
         citados: tuple[Titulo, ...] = (),
     ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
             evidencia=(evidencia,),
             destino=Destino.FILA_DE_EXCECOES,
-            titulos=sugeridos,
+            titulos=titulos_candidatos,
             explicacao=explicacao,
             motivo=motivo,
             citados=citados,
@@ -738,12 +806,12 @@ def _documentos(titulos: list[Titulo]) -> str:
 
 
 def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: ParametrosDeEncargo) -> Classificacao:
-    pagamento = enquadrar(titulo, lancamento.valor_centavos, lancamento.data, encargo)
+    enquadrado = enquadrar(titulo, lancamento.valor_centavos, lancamento.data, encargo)
     identificacao = (
         f"Nosso número {titulo.nosso_numero} é do Título {titulo.documento} ({titulo.sistema_de_origem}); "
-        f"valor {formatar_reais(lancamento.valor_centavos)}: {pagamento.descrever()}."
+        f"valor {formatar_reais(lancamento.valor_centavos)}: {enquadrado.descrever()}."
     )
-    if pagamento.fecha:
+    if enquadrado.fecha:
         return Classificacao(
             lancamento=lancamento,
             destino=Destino.LISTA_DE_BAIXA,

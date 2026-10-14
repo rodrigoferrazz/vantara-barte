@@ -92,7 +92,7 @@ def test_resumo_mostra_quanto_foi_resolvido_sozinho_em_quantidade_e_valor_e_os_c
             _liquidacao("05/03/2025", "1.000,00", "000016000011"),
             _liquidacao("05/03/2025", "2.500,00", "000016000022"),
             LinhaItau("06/03/2025", "PIX RECEBIDO FULANO", "250,00"),
-            LinhaItau("06/03/2025", "TARIFA PIX", "2,50", tipo="D"),
+            LinhaItau("06/03/2025", "TARIFA BANCARIA", "2,50", tipo="D"),
         ],
     )
     workbook = tmp_path / "conciliacao.xlsx"
@@ -113,7 +113,7 @@ def test_resumo_mostra_quanto_foi_resolvido_sozinho_em_quantidade_e_valor_e_os_c
 def test_resumo_sem_credito_para_conciliar_nao_inventa_percentual(
     pasta: Path, armazenamento: Armazenamento, tmp_path: Path
 ) -> None:
-    escrever_extrato_itau(pasta, [LinhaItau("06/03/2025", "TARIFA PIX", "2,50", tipo="D")])
+    escrever_extrato_itau(pasta, [LinhaItau("06/03/2025", "TARIFA BANCARIA", "2,50", tipo="D")])
     workbook = tmp_path / "conciliacao.xlsx"
 
     resultado = _executar(pasta, armazenamento, workbook)

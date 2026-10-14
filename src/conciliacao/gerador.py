@@ -22,27 +22,28 @@ _CONTAS = 4
 _PROTHEUS, _OMIE = "Protheus", "Omie"
 
 _TIPOS = (
-    "Padaria", "Confeitaria", "Panificadora", "Empório", "Doceria", "Cafeteria",
-    "Casa do Pão", "Rede", "Mercearia", "Pastelaria", "Bistrô", "Lanchonete",
+    "Quitanda", "Confeitaria", "Panificadora", "Armazém", "Doceria", "Cafeteria",
+    "Sorveteria", "Biscoiteria", "Mercearia", "Pastelaria", "Bistrô", "Lanchonete",
 )  # fmt: skip
 _PRIMEIRAS = (
-    "Aurora", "Primavera", "Horizonte", "Bela Vista", "Vila Nova", "Santa Clara", "São Jorge", "Trigo",
+    "Aurora", "Primavera", "Horizonte", "Boa Esperança", "Bom Retiro", "Santa Clara", "São Jorge", "Aroma",
     "Girassol", "Jardim", "Estrela", "Recanto", "Pomar", "Colina", "Alvorada", "Bom Gosto", "Fornalha",
-    "Ipê", "Cantinho", "Sabor", "Ouro", "Lua", "Serra", "Lagoa", "Moinho", "Sol", "Vale", "Monte",
+    "Ipê", "Encanto", "Ventura", "Ouro", "Lua", "Serra", "Lagoa", "Moinho", "Sol", "Vale", "Monte",
     "Ribeira", "Canela", "Palmeira", "Tradição", "Família", "Pioneira", "Imperial", "Real", "Oásis",
 )  # fmt: skip
 _SEGUNDAS = (
-    "Dourada", "Mineiro", "Paulista", "do Sul", "Nobre", "Central", "Feliz", "Doce", "Prime", "Gourmet",
-    "Brasil", "Norte", "Azul", "Verde", "Nova", "Antiga", "Fina", "Rústica", "Caseira", "Artesanal",
+    "Dourada", "Capixaba", "Paulista", "do Sul", "Serena", "Leste", "Feliz", "Bonita", "Prime", "Gourmet",
+    "Brasil", "Oeste", "Azul", "Verde", "Alegre", "Antiga", "Fina", "Rústica", "Caseira", "Artesanal",
 )  # fmt: skip
-_SUFIXOS = ("Ltda", "ME", "S.A.", "Eireli", "Comércio de Alimentos Ltda", "& Cia Ltda", "EPP")
+_SUFIXOS = ("Ltda", "ME", "S.A.", "Eireli", "Indústria e Comércio Ltda", "& Cia Ltda", "EPP")
 _SUFIXOS_DO_OMIE = ("LTDA", "S/A", "EIRELI", "COM LTDA", "ME")
 _UNIDADES = ("SP-Capital", "SP-Interior", "MG", "RJ", "PR", "SC", "RS", "BA")
+_UNIDADE_DO_OMIE = "AM"
 _TIPOS_DE_TITULO = ("Produto", "Royalty", "Serviço")
 _DEPOSITOS = ("DEPOSITO NAO IDENTIFICADO", "DEPOSITO EM DINHEIRO", "DEPOSITO ENVELOPE")
-_DEBITOS = ("TARIFA PACOTE COBRANCA", "TARIFA PIX EMISSAO", "TED ENVIADA FORNECEDOR", "PAGAMENTO DE SALARIOS")
+_DEBITOS = ("CESTA DE SERVICOS", "IOF", "TED ENVIADA", "PAGAMENTO DE SALARIOS")
 _LIQUIDACAO = "LIQUIDACAO COBRANCA SIMPLES"
-_TARIFA_DO_FIM_DO_MES = "TARIFA MANUTENCAO CONTA"
+_DEBITO_DO_FIM_DO_MES = "MANUTENCAO DE CONTA"
 
 
 class ConfiguracaoDoGeradorInvalida(ValueError):
@@ -77,7 +78,7 @@ class Proporcoes:
     multa: float = 0.04
     encargo_nao_pago: float = 0.04
     deposito_sem_nome: float = 0.02
-    sem_pagamento: float = 0.08
+    sem_credito: float = 0.08
     duplicidade_entre_sistemas: float = 0.01
     antecipacao: float = 0.01
     debitos: float = 0.03
@@ -132,7 +133,7 @@ def gerar_dados_sinteticos(configuracao: ConfiguracaoDoGerador) -> DadosSintetic
 
 _FRACOES_QUE_CONSOMEM_TITULOS = (
     "nome_truncado", "nome_abreviado", "nome_invertido", "cnpj_no_historico", "soma_de_titulos",
-    "parcial", "multa", "encargo_nao_pago", "deposito_sem_nome", "sem_pagamento", "duplicidade_entre_sistemas",
+    "parcial", "multa", "encargo_nao_pago", "deposito_sem_nome", "sem_credito", "duplicidade_entre_sistemas",
 )  # fmt: skip
 
 
@@ -268,7 +269,7 @@ class _Gerador:
                     nucleo=nucleo,
                     nome_protheus=None if norte else nome,
                     nome_omie=_como_o_omie_escreve(f"{tipo} {nucleo} {self.rng.choice(_SUFIXOS_DO_OMIE)}") if norte else None,
-                    unidade="Norte" if norte else self.rng.choice(_UNIDADES),
+                    unidade=_UNIDADE_DO_OMIE if norte else self.rng.choice(_UNIDADES),
                 )
             )
 
@@ -361,7 +362,7 @@ class _Gerador:
             (Caso.MULTA, proporcoes.multa, self._multa),
             (Caso.ENCARGO_NAO_PAGO, proporcoes.encargo_nao_pago, self._encargo_nao_pago),
             (Caso.DEPOSITO_SEM_NOME, proporcoes.deposito_sem_nome, self._deposito),
-            (None, proporcoes.sem_pagamento, self._sem_pagamento),
+            (None, proporcoes.sem_credito, self._sem_credito),
         )
         originais = [t for t in self.titulos if not self._eh_copia(t)]
         for caso, fracao, tentar in tentativas:
@@ -374,7 +375,7 @@ class _Gerador:
                 if titulo.chave not in self.pagos and tentar(titulo):
                     faltam -= 1
             if faltam:
-                nome = caso.value if caso else "sem pagamento"
+                nome = caso.value if caso else "sem Crédito"
                 raise ConfiguracaoDoGeradorInvalida(f"faltaram Títulos para mais {faltam} casos de {nome}")
         self._antecipacoes(self.quantidade(proporcoes.antecipacao))
         for titulo in originais:
@@ -475,7 +476,7 @@ class _Gerador:
             MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
         )  # fmt: skip
 
-    def _sem_pagamento(self, titulo: _Titulo) -> bool:
+    def _sem_credito(self, titulo: _Titulo) -> bool:
         self.pagos.add(titulo.chave)
         return True
 
@@ -563,9 +564,9 @@ class _Gerador:
         quantidade = self.quantidade(self.configuracao.proporcoes.debitos)
         feitos = 0
         for conta in self.contas[:quantidade]:
-            feitos += self._debito(_Lancamento(conta.conta, self.dias_uteis[-1], _TARIFA_DO_FIM_DO_MES, "", self._valor(20_00, 200_00), Natureza.DEBITO))
+            feitos += self._debito(_Lancamento(conta.conta, self.dias_uteis[-1], _DEBITO_DO_FIM_DO_MES, "", self._valor(20_00, 200_00), Natureza.DEBITO))
         while feitos < quantidade:
-            historico = self.rng.choice((*_DEBITOS, f"PAGAMENTO FORNECEDOR NF {self.rng.randrange(10_000, 100_000)}"))
+            historico = self.rng.choice((*_DEBITOS, f"COMPRA DE INSUMOS NF {self.rng.randrange(10_000, 100_000)}"))
             feitos += self._debito(
                 _Lancamento(
                     self._conta_qualquer(), self.rng.choice(self.dias_uteis), historico, "",

@@ -135,7 +135,7 @@ class ParecerSobreFranqueado:
 class Titulo:
     sistema_de_origem: str
     documento: str
-    cliente: str
+    nome_do_franqueado: str
     cnpj: str
     nosso_numero: str | None
     vencimento: date
@@ -576,7 +576,7 @@ class DecisaoSobreProposta:
 
 
 @dataclass(frozen=True)
-class PrimeiraSugestaoDaIa:
+class PrimeiroParecerDaIa:
     pareceres: tuple[ParecerSobreFranqueado, ...]
     franqueados_decididos: frozenset[str] | None
 
@@ -589,7 +589,7 @@ class Metricas:
 
     @classmethod
     def calcular(
-        cls, propostas: Iterable[DecisaoSobreProposta], sugestoes: Iterable[PrimeiraSugestaoDaIa]
+        cls, propostas: Iterable[DecisaoSobreProposta], primeiros_pareceres: Iterable[PrimeiroParecerDaIa]
     ) -> "Metricas":
         decididas = list(propostas)
         return cls(
@@ -597,7 +597,7 @@ class Metricas:
                 decididas, [e.value for e in TipoDeEvidencia], lambda d: [e.value for e in d.evidencia]
             ),
             por_regra=_rejeicao(decididas, [r.value for r in RegraDaProposta], lambda d: [d.regra.value]),
-            acerto_da_ia=_acerto_da_ia(sugestoes),
+            acerto_da_ia=_acerto_da_ia(primeiros_pareceres),
         )
 
 
@@ -622,11 +622,11 @@ def _rejeicao(
     )
 
 
-def _acerto_da_ia(sugestoes: Iterable[PrimeiraSugestaoDaIa]) -> tuple[AcertoDaIa, ...]:
-    por_versao: dict[tuple[str, str], list[PrimeiraSugestaoDaIa]] = {}
-    for sugestao in sugestoes:
-        parecer = sugestao.pareceres[0].parecer
-        por_versao.setdefault((parecer.modelo, parecer.versao_do_prompt), []).append(sugestao)
+def _acerto_da_ia(primeiros_pareceres: Iterable[PrimeiroParecerDaIa]) -> tuple[AcertoDaIa, ...]:
+    por_versao: dict[tuple[str, str], list[PrimeiroParecerDaIa]] = {}
+    for primeiro in primeiros_pareceres:
+        parecer = primeiro.pareceres[0].parecer
+        por_versao.setdefault((parecer.modelo, parecer.versao_do_prompt), []).append(primeiro)
     resultado = []
     for (modelo, versao), da_versao in sorted(por_versao.items()):
         avaliaveis = [s for s in da_versao if s.franqueados_decididos is not None and len(s.franqueados_decididos) == 1]
@@ -642,9 +642,9 @@ def _acerto_da_ia(sugestoes: Iterable[PrimeiraSugestaoDaIa]) -> tuple[AcertoDaIa
     return tuple(resultado)
 
 
-def _acertou(sugestao: PrimeiraSugestaoDaIa) -> bool:
-    decididos = sugestao.franqueados_decididos or frozenset()
-    return all((p.parecer.resposta is Resposta.SIM) == (p.franqueado in decididos) for p in sugestao.pareceres)
+def _acertou(primeiro: PrimeiroParecerDaIa) -> bool:
+    decididos = primeiro.franqueados_decididos or frozenset()
+    return all((p.parecer.resposta is Resposta.SIM) == (p.franqueado in decididos) for p in primeiro.pareceres)
 
 
 def _agrupar(

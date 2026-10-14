@@ -62,7 +62,7 @@ class ProtheusContasAReceber:
                 Titulo(
                     sistema_de_origem=self.sistema_de_origem,
                     documento=campos["documento"],
-                    cliente=campos["cliente"],
+                    nome_do_franqueado=campos["cliente"],
                     cnpj=_formato(numero, cnpj, campos["cnpj"]),
                     nosso_numero=campos["nosso_numero"] or None,
                     vencimento=_formato(numero, data_ptbr, campos["vencimento"]),
@@ -88,7 +88,7 @@ class OmieTitulos:
                 Titulo(
                     sistema_de_origem=self.sistema_de_origem,
                     documento=campos["invoice_ref"],
-                    cliente=campos["customer_name"],
+                    nome_do_franqueado=campos["customer_name"],
                     cnpj=_formato(numero, cnpj_sem_pontuacao, campos["tax_id"]),
                     nosso_numero=None,
                     vencimento=_formato(numero, data_iso, campos["due_date"]),

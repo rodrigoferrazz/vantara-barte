@@ -23,7 +23,7 @@ def test_comando_gera_workbook_com_resumo_no_topo_e_as_quatro_abas(tmp_path: Pat
         [
             LinhaItau("06/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "1.000,00", documento="000088800011"),
             LinhaItau("07/03/2025", "PIX RECEBIDO FULANO", "250,00"),
-            LinhaItau("07/03/2025", "TARIFA PIX", "2,50", tipo="D"),
+            LinhaItau("07/03/2025", "TARIFA BANCARIA", "2,50", tipo="D"),
         ],
     )
     saida = tmp_path / "conciliacao.xlsx"
@@ -64,7 +64,7 @@ def test_comando_gera_workbook_com_resumo_no_topo_e_as_quatro_abas(tmp_path: Pat
     fila = _linhas(workbook["Fila de exceções"])
     assert [linha["Histórico"] for linha in fila] == ["PIX RECEBIDO FULANO"]
     assert fila[0]["Motivo"]
-    assert [linha["Histórico"] for linha in _linhas(workbook["Fora do escopo"])] == ["TARIFA PIX"]
+    assert [linha["Histórico"] for linha in _linhas(workbook["Fora do escopo"])] == ["TARIFA BANCARIA"]
     resumo = {linha[0]: linha[1] for linha in workbook["Resumo"].iter_rows(values_only=True)}
     assert resumo["Lista de baixa"] == "1 lançamento(s), R$ 1.000,00"
     assert resumo["Fila de exceções"] == "1 lançamento(s), R$ 250,00"

@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -5,9 +6,8 @@ import pytest
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.conferencia import ConferenciaDeSomaFalhou
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
-from conciliacao.dominio import MotivoDeNaoIdentificacao
+from conciliacao.dominio import Classificacao, Destino, Lancamento, MotivoDeNaoIdentificacao, Natureza
 from conciliacao.execucao import executar_conciliacao
-from conciliacao.motor import conciliar
 from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
 from tests.parecerista import PareceristaFalso
 
@@ -36,7 +36,7 @@ def test_debitos_e_tarifas_vao_para_fora_do_escopo(pasta: Path, armazenamento: A
         pasta,
         [
             LinhaItau("03/03/2025", "TARIFA MANUTENCAO CONTA", "35,90", tipo="D"),
-            LinhaItau("04/03/2025", "PAGAMENTO FORNECEDOR", "500,00", tipo="D", documento="000077700022"),
+            LinhaItau("04/03/2025", "COMPRA DE INSUMOS", "500,00", tipo="D", documento="000077700022"),
         ],
     )
 
@@ -44,7 +44,7 @@ def test_debitos_e_tarifas_vao_para_fora_do_escopo(pasta: Path, armazenamento: A
 
     assert [item.lancamento.historico for item in resultado.fora_do_escopo] == [
         "TARIFA MANUTENCAO CONTA",
-        "PAGAMENTO FORNECEDOR",
+        "COMPRA DE INSUMOS",
     ]
     assert resultado.lista_de_baixa == []
     assert resultado.fila_de_excecoes == []
@@ -162,19 +162,28 @@ def test_extrato_com_nome_fora_da_configuracao_nao_entra(pasta: Path, armazename
 
 
 def test_conferencia_de_soma_que_nao_fecha_para_a_execucao_sem_guardar_nada(
-    pasta: Path, armazenamento: Armazenamento, monkeypatch: pytest.MonkeyPatch
+    pasta: Path, armazenamento: Armazenamento
 ) -> None:
     escrever_protheus(pasta, [])
     escrever_extrato_itau(
         pasta,
         [LinhaItau("14/03/2025", "PIX RECEBIDO BELTRANO", "95,00"), LinhaItau("15/03/2025", "TARIFA", "1,00", tipo="D")],
     )
-    monkeypatch.setattr("conciliacao.execucao.conciliar", lambda *args: conciliar(*args)[1:])
+
+    def motor_que_perde_o_credito(
+        titulos: object, lancamentos: Iterable[Lancamento], *args: object, **kwargs: object
+    ) -> list[Classificacao]:
+        return [
+            Classificacao(lancamento, Destino.FORA_DO_ESCOPO, (), "débito")
+            for lancamento in lancamentos
+            if lancamento.natureza is Natureza.DEBITO
+        ]
 
     with pytest.raises(ConferenciaDeSomaFalhou, match="R\\$ 96,00"):
-        executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
+        executar_conciliacao(
+            pasta, armazenamento, configuracao_itau(), PareceristaFalso(), motor=motor_que_perde_o_credito
+        )
 
-    monkeypatch.undo()
     resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), PareceristaFalso())
     assert resultado.resumo.lancamentos_novos == 2
     assert resultado.resumo.execucao == 1

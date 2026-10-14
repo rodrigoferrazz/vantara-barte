@@ -31,9 +31,9 @@ def _cenario_com_varios_motivos(pasta: Path) -> None:
         [
             TituloProtheus(documento="NF A1", valor="1.000,00", cliente="Aurora Panificadora Ltda", cnpj=CNPJ_A),
             TituloProtheus(documento="NF A2", valor="2.000,00", cliente="Aurora Panificadora Ltda", cnpj=CNPJ_A),
-            TituloProtheus(documento="NF B1", valor="500,00", cliente="Bela Vista Emporio Ltda", cnpj=CNPJ_B),
+            TituloProtheus(documento="NF B1", valor="500,00", cliente="Brisa Serena Armazem Ltda", cnpj=CNPJ_B),
             TituloProtheus(
-                documento="NF C1", valor="800,00", cliente="Cantinho Doce Ltda", cnpj=CNPJ_C, nosso_numero="000077700001"
+                documento="NF C1", valor="800,00", cliente="Recanto Feliz Ltda", cnpj=CNPJ_C, nosso_numero="000077700001"
             ),
         ],
     )
@@ -42,11 +42,11 @@ def _cenario_com_varios_motivos(pasta: Path) -> None:
         [
             LinhaItau("05/03/2025", "PIX RECEBIDO AURORA PANIF", "1.000,00"),
             LinhaItau("05/03/2025", "TED RECEBIDA CNPJ 10200300000140", "1.234,00"),
-            LinhaItau("06/03/2025", "PIX RECEBIDO BELA VISTA EMP", "500,00"),
+            LinhaItau("06/03/2025", "PIX RECEBIDO BRISA SERENA ARM", "500,00"),
             LinhaItau("06/03/2025", "LIQUIDACAO COBRANCA SIMPLES", "750,00", documento="000077700001"),
             LinhaItau("07/03/2025", "DEPOSITO EM DINHEIRO", "333,00"),
             LinhaItau("07/03/2025", "PIX RECEBIDO 30600900000110", "800,00"),
-            LinhaItau("07/03/2025", "TARIFA PIX", "2,50", tipo="D"),
+            LinhaItau("07/03/2025", "TARIFA BANCARIA", "2,50", tipo="D"),
         ],
     )
 
@@ -97,8 +97,8 @@ def test_agregacao_por_franqueado_ordena_por_concentracao_e_poe_sem_franqueado_a
 
     assert [(g.nome, g.quantidade, g.valor_centavos) for g in causa_raiz.por_franqueado] == [
         ("Aurora Panificadora Ltda (raiz 10200300)", 2, 223400),
-        ("Cantinho Doce Ltda (raiz 30600900)", 1, 75000),
-        ("Bela Vista Emporio Ltda (raiz 20400600)", 1, 50000),
+        ("Recanto Feliz Ltda (raiz 30600900)", 1, 75000),
+        ("Brisa Serena Armazem Ltda (raiz 20400600)", 1, 50000),
         (CausaRaiz.SEM_FRANQUEADO, 1, 33300),
     ]
 
@@ -109,11 +109,11 @@ def test_credito_cujo_nome_aponta_mais_de_um_franqueado_fica_sem_franqueado(
     escrever_protheus(
         pasta,
         [
-            TituloProtheus(documento="NF A1", valor="700,00", cliente="Padaria Central Norte", cnpj=CNPJ_A),
-            TituloProtheus(documento="NF B1", valor="700,00", cliente="Padaria Central Sul", cnpj=CNPJ_B),
+            TituloProtheus(documento="NF A1", valor="700,00", cliente="Quitanda Estrela Leste", cnpj=CNPJ_A),
+            TituloProtheus(documento="NF B1", valor="700,00", cliente="Quitanda Estrela Oeste", cnpj=CNPJ_B),
         ],
     )
-    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO PADARIA CENTRAL", "700,00")])
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO QUITANDA ESTRELA", "700,00")])
 
     resultado = _executar(pasta, armazenamento)
 
@@ -128,27 +128,27 @@ def test_valor_desempata_o_nome_entre_franqueados_e_atribui_o_credito_ao_franque
     escrever_protheus(
         pasta,
         [
-            TituloProtheus(documento="NF A1", valor="700,00", cliente="Padaria Central Norte", cnpj=CNPJ_A),
-            TituloProtheus(documento="NF B1", valor="900,00", cliente="Padaria Central Sul", cnpj=CNPJ_B),
+            TituloProtheus(documento="NF A1", valor="700,00", cliente="Quitanda Estrela Leste", cnpj=CNPJ_A),
+            TituloProtheus(documento="NF B1", valor="900,00", cliente="Quitanda Estrela Oeste", cnpj=CNPJ_B),
         ],
     )
-    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO PADARIA CENTRAL", "900,00")])
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO QUITANDA ESTRELA", "900,00")])
 
     resultado = _executar(pasta, armazenamento)
 
     [item] = resultado.fila_de_excecoes
     assert item.motivo is MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ
-    assert _por_nome(resultado.causa_raiz.por_franqueado) == {"Padaria Central Sul (raiz 20400600)": (1, 90000)}
+    assert _por_nome(resultado.causa_raiz.por_franqueado) == {"Quitanda Estrela Oeste (raiz 20400600)": (1, 90000)}
 
 
 def test_franqueado_pelo_parecer_positivo_da_ia(pasta: Path, armazenamento: Armazenamento) -> None:
-    escrever_protheus(pasta, [TituloProtheus(documento="NF A1", valor="700,00", cliente="Sabor e Companhia Ltda")])
-    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO SABOR CIA", "700,00")])
-    parecerista = PareceristaFalso(sim_para=[("SABOR CIA", "Sabor e Companhia Ltda")])
+    escrever_protheus(pasta, [TituloProtheus(documento="NF A1", valor="700,00", cliente="Aroma e Companhia Ltda")])
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "PIX RECEBIDO AROMA CIA", "700,00")])
+    parecerista = PareceristaFalso(sim_para=[("AROMA CIA", "Aroma e Companhia Ltda")])
 
     resultado = executar_conciliacao(pasta, armazenamento, configuracao_itau(), parecerista)
 
-    assert _por_nome(resultado.causa_raiz.por_franqueado) == {"Sabor e Companhia Ltda (raiz 10200300)": (1, 70000)}
+    assert _por_nome(resultado.causa_raiz.por_franqueado) == {"Aroma e Companhia Ltda (raiz 10200300)": (1, 70000)}
 
 
 def test_canal_inferido_do_historico_e_todos_os_canais_aparecem(pasta: Path, armazenamento: Armazenamento) -> None:
@@ -189,7 +189,7 @@ def test_agregacao_por_banco(pasta: Path, armazenamento: Armazenamento) -> None:
 
 
 def test_fila_vazia_tem_causa_raiz_zerada_sem_dividir_por_zero(pasta: Path, armazenamento: Armazenamento) -> None:
-    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "TARIFA PIX", "2,50", tipo="D")])
+    escrever_extrato_itau(pasta, [LinhaItau("05/03/2025", "TARIFA BANCARIA", "2,50", tipo="D")])
 
     causa_raiz = _executar(pasta, armazenamento).causa_raiz
 

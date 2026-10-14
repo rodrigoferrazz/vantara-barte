@@ -275,7 +275,7 @@ def _aba_de_baixa_manual(aba: Worksheet, baixas: tuple[BaixaManual, ...]) -> Non
             (
                 titulo.documento,
                 titulo.sistema_de_origem,
-                titulo.cliente,
+                titulo.nome_do_franqueado,
                 titulo.cnpj,
                 titulo.vencimento,
                 Decimal(baixa.principal_centavos) / 100,
@@ -304,7 +304,7 @@ def _aba_de_cancelar_na_origem(aba: Worksheet, titulos: tuple[TituloACancelar, .
             (
                 titulo.documento,
                 titulo.sistema_de_origem,
-                titulo.cliente,
+                titulo.nome_do_franqueado,
                 titulo.cnpj,
                 titulo.vencimento,
                 Decimal(titulo.valor_centavos) / 100,
@@ -339,7 +339,7 @@ def _aba_de_acompanhamento_do_erp(aba: Worksheet, titulos: tuple[TituloNoAcompan
                 acompanhado.situacao.value,
                 titulo.documento,
                 titulo.sistema_de_origem,
-                titulo.cliente,
+                titulo.nome_do_franqueado,
                 titulo.cnpj,
                 titulo.vencimento,
                 Decimal(titulo.valor_centavos) / 100,
@@ -404,7 +404,7 @@ def _linha_da_cobranca(aba: Worksheet, na_cobranca: TituloNaCobranca, *extras: s
         (
             titulo.documento,
             titulo.sistema_de_origem,
-            titulo.cliente,
+            titulo.nome_do_franqueado,
             titulo.cnpj,
             titulo.vencimento,
             vencimento_efetivo(titulo.vencimento),

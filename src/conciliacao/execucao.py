@@ -10,19 +10,16 @@ from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
 from conciliacao.decisoes import aplicar_decisoes
 from conciliacao.dominio import (
-    ChaveNatural,
     Classificacao,
     DataDeReferencia,
-    Destino,
     Lancamento,
-    MotivoDeNaoIdentificacao,
     Natureza,
     Resultado,
     TipoDeDecisao,
     Titulo,
     UltimaDataDaConta,
 )
-from conciliacao.motor import conciliar, lista_de_cobranca, possiveis_duplicidades
+from conciliacao.motor import Motor, conciliar, lista_de_cobranca, possiveis_duplicidades
 from conciliacao.parecerista import PareceristaDeNome
 
 
@@ -32,6 +29,7 @@ def executar_conciliacao(
     configuracao: Configuracao,
     parecerista: PareceristaDeNome,
     workbook_anterior: Path | None = None,
+    motor: Motor = conciliar,
 ) -> Resultado:
     leitura = ler_pasta(pasta, configuracao)
     with armazenamento.transacao():
@@ -60,24 +58,20 @@ def executar_conciliacao(
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
-        pelo_saldo = _com_divergencias(
-            _com_classificacoes_da_analista(
-                conciliar(
-                    titulos,
-                    lancamentos.values(),
-                    armazenamento.franqueados().values(),
-                    configuracao.encargo,
-                    nome_do_pagador,
-                    canal_do_credito,
-                    configuracao.limite_de_combinacoes,
-                    parecerista,
-                    armazenamento.pares_rejeitados(),
-                    armazenamento.pagadores_conhecidos(),
-                ),
-                armazenamento.classificados_como(TipoDeDecisao.ANTECIPACAO),
-                armazenamento.classificados_como(TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA),
-            ),
-            armazenamento.divergencias(),
+        pelo_saldo = motor(
+            titulos,
+            lancamentos.values(),
+            armazenamento.franqueados().values(),
+            configuracao.encargo,
+            nome_do_pagador,
+            canal_do_credito,
+            configuracao.limite_de_combinacoes,
+            parecerista,
+            armazenamento.pares_rejeitados(),
+            armazenamento.pagadores_conhecidos(),
+            antecipacoes=armazenamento.classificados_como(TipoDeDecisao.ANTECIPACAO),
+            fontes_nao_integradas=armazenamento.classificados_como(TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA),
+            divergencias=armazenamento.divergencias(),
         )
         classificacoes = [_com_titulos_da_exportacao(c, originais) for c in pelo_saldo]
         conferir_soma(list(lancamentos.values()), classificacoes)
@@ -116,65 +110,6 @@ def executar_conciliacao(
             conflitos_das_decisoes=decisoes.lidas.conflitos,
         )
     return armazenamento.carregar_resultado(execucao)
-
-
-def _com_classificacoes_da_analista(
-    classificacoes: list[Classificacao],
-    antecipacoes: Mapping[ChaveNatural, datetime],
-    fontes_nao_integradas: Mapping[ChaveNatural, datetime],
-) -> list[Classificacao]:
-    return [
-        _como_fonte_nao_integrada(_como_antecipacao(c, antecipacoes), fontes_nao_integradas) for c in classificacoes
-    ]
-
-
-def _como_antecipacao(c: Classificacao, antecipacoes: Mapping[ChaveNatural, datetime]) -> Classificacao:
-    momento = antecipacoes.get(c.lancamento.chave_natural)
-    if momento is None:
-        return c
-    return replace(
-        c,
-        explicacao=f"{c.explicacao} Classificado pela Analista como {TipoDeDecisao.ANTECIPACAO.value} "
-        f"em {momento:%d/%m/%Y}; o Crédito continua vivo e é retentado a cada nova importação.",
-    )
-
-
-def _como_fonte_nao_integrada(c: Classificacao, fontes: Mapping[ChaveNatural, datetime]) -> Classificacao:
-    momento = fontes.get(c.lancamento.chave_natural)
-    if momento is None or c.destino is not Destino.FILA_DE_EXCECOES:
-        return c
-    fonte = MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA
-    return replace(
-        c,
-        motivo=fonte,
-        explicacao=f"{c.explicacao} Classificado pela Analista como {fonte.value} em {momento:%d/%m/%Y} "
-        f"(o motor apontava '{c.motivo}'); o Crédito continua vivo e é retentado a cada nova importação.",
-    )
-
-
-def _com_divergencias(
-    classificacoes: list[Classificacao], divergencias: Mapping[ChaveNatural, list[str]]
-) -> list[Classificacao]:
-    com_divergencia = []
-    for c in classificacoes:
-        explicacoes = divergencias.get(c.lancamento.chave_natural)
-        if not explicacoes:
-            com_divergencia.append(c)
-            continue
-        explicacao = " ".join((c.explicacao, *explicacoes))
-        if c.destino is Destino.LISTA_DE_BAIXA:
-            com_divergencia.append(
-                replace(
-                    c,
-                    destino=Destino.FILA_DE_EXCECOES,
-                    explicacao=explicacao,
-                    motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
-                    regra=None,
-                )
-            )
-        else:
-            com_divergencia.append(replace(c, explicacao=explicacao))
-    return com_divergencia
 
 
 def _com_titulos_da_exportacao(

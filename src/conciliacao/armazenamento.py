@@ -21,7 +21,7 @@ from conciliacao.dominio import (
     DecisoesLidas,
     Metricas,
     ParteAutomatica,
-    PrimeiraSugestaoDaIa,
+    PrimeiroParecerDaIa,
     ParRejeitado,
     RegraDaProposta,
     TipoDeDecisao,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS titulos (
     execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
     sistema_de_origem TEXT NOT NULL,
     documento TEXT NOT NULL,
-    cliente TEXT NOT NULL,
+    nome_do_franqueado TEXT NOT NULL,
     cnpj TEXT NOT NULL,
     nosso_numero TEXT,
     vencimento TEXT NOT NULL,
@@ -264,7 +264,7 @@ _EM_VIGOR = f"{_SEM_REVERSAO} AND d.id NOT IN (SELECT confirmacao_id FROM diverg
 _COLUNAS_LANCAMENTO = "banco, conta, data, natureza, valor_centavos, historico, documento, ordinal"
 _COLUNAS_DO_LANCAMENTO_L = ", ".join(f"l.{coluna}" for coluna in _COLUNAS_LANCAMENTO.split(", "))
 _COLUNAS_TITULO = (
-    "t.sistema_de_origem, t.documento, t.cliente, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
+    "t.sistema_de_origem, t.documento, t.nome_do_franqueado, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
 )
 
 
@@ -272,11 +272,17 @@ class Armazenamento:
     def __init__(self, caminho: Path) -> None:
         self._conexao = sqlite3.connect(caminho, autocommit=False)
         self._conexao.execute("PRAGMA foreign_keys = ON")
+        self._renomear_coluna_antiga_do_nome_do_franqueado()
         self._conexao.executescript(_ESQUEMA)
         self._conexao.commit()
 
     def fechar(self) -> None:
         self._conexao.close()
+
+    def _renomear_coluna_antiga_do_nome_do_franqueado(self) -> None:
+        colunas = {linha[1] for linha in self._conexao.execute("PRAGMA table_info(titulos)")}
+        if "cliente" in colunas:
+            self._conexao.execute("ALTER TABLE titulos RENAME COLUMN cliente TO nome_do_franqueado")
 
     @contextmanager
     def transacao(self) -> Iterator[None]:
@@ -735,9 +741,9 @@ class Armazenamento:
 
     def franqueados(self) -> dict[str, Franqueado]:
         nomes: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-        linhas = self._conexao.execute("SELECT DISTINCT cnpj, sistema_de_origem, cliente FROM titulos")
-        for cnpj, sistema, cliente in linhas:
-            nomes[raiz_do_cnpj(cnpj)][sistema].add(cliente)
+        linhas = self._conexao.execute("SELECT DISTINCT cnpj, sistema_de_origem, nome_do_franqueado FROM titulos")
+        for cnpj, sistema, nome_do_franqueado in linhas:
+            nomes[raiz_do_cnpj(cnpj)][sistema].add(nome_do_franqueado)
         return {
             raiz: Franqueado(raiz=raiz, nomes={sistema: frozenset(n) for sistema, n in por_sistema.items()})
             for raiz, por_sistema in nomes.items()
@@ -898,13 +904,13 @@ class Armazenamento:
 
     def _guardar_titulo(self, execucao: int, titulo: Titulo) -> int:
         cursor = self._conexao.execute(
-            "INSERT INTO titulos (execucao_id, sistema_de_origem, documento, cliente, cnpj, nosso_numero, vencimento,"
+            "INSERT INTO titulos (execucao_id, sistema_de_origem, documento, nome_do_franqueado, cnpj, nosso_numero, vencimento,"
             " valor_centavos) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 execucao,
                 titulo.sistema_de_origem,
                 titulo.documento,
-                titulo.cliente,
+                titulo.nome_do_franqueado,
                 titulo.cnpj,
                 titulo.nosso_numero,
                 titulo.vencimento.isoformat(),
@@ -957,7 +963,7 @@ class Armazenamento:
             cancelar_na_origem=tuple(self._cancelar_na_origem(execucao)),
             conciliados_fora=conciliados_fora,
             acompanhamento_do_erp=tuple(self._acompanhamento_do_erp(execucao)),
-            metricas=Metricas.calcular(self._propostas_decididas(execucao), self._primeiras_sugestoes_da_ia(execucao)),
+            metricas=Metricas.calcular(self._propostas_decididas(execucao), self._primeiros_pareceres_da_ia(execucao)),
         )
 
     def _execucao_anterior(self, execucao: int) -> int | None:
@@ -979,7 +985,7 @@ class Armazenamento:
                 revertida=bool(revertida),
             )
 
-    def _primeiras_sugestoes_da_ia(self, execucao: int) -> Iterator[PrimeiraSugestaoDaIa]:
+    def _primeiros_pareceres_da_ia(self, execucao: int) -> Iterator[PrimeiroParecerDaIa]:
         primeiros: dict[int, int] = {}
         for lancamento_id, item_id in self._conexao.execute(
             "SELECT i.lancamento_id, i.id FROM itens i WHERE i.execucao_id <= ?"
@@ -990,7 +996,7 @@ class Armazenamento:
         ):
             primeiros.setdefault(lancamento_id, item_id)
         for lancamento_id, item_id in primeiros.items():
-            yield PrimeiraSugestaoDaIa(
+            yield PrimeiroParecerDaIa(
                 pareceres=self._pareceres("itens_pareceres", "item_id", item_id),
                 franqueados_decididos=self._franqueados_decididos(lancamento_id, execucao),
             )
@@ -1199,11 +1205,11 @@ class Armazenamento:
 
 
 def _titulo(linha: tuple[str, str, str, str, str | None, str, int]) -> Titulo:
-    sistema, documento, cliente, cnpj, nosso_numero, vencimento, valor = linha
+    sistema, documento, nome_do_franqueado, cnpj, nosso_numero, vencimento, valor = linha
     return Titulo(
         sistema_de_origem=sistema,
         documento=documento,
-        cliente=cliente,
+        nome_do_franqueado=nome_do_franqueado,
         cnpj=cnpj,
         nosso_numero=nosso_numero,
         vencimento=date.fromisoformat(vencimento),

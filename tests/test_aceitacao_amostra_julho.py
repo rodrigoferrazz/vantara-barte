@@ -1,5 +1,7 @@
+import ast
 import csv
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -17,6 +19,7 @@ from tests.parecerista import PareceristaFalso, ollama_do_projeto
 RAIZ = Path(__file__).parent.parent
 AMOSTRA = RAIZ / "data"
 CODIGO_DE_PRODUCAO = RAIZ / "src"
+DESIGNACOES_DE_RAZAO_SOCIAL = {"LTDA", "EIRELI", "EPP", "CIA", "COMERCIO"}
 
 LISTA = Destino.LISTA_DE_BAIXA
 FILA = Destino.FILA_DE_EXCECOES
@@ -202,13 +205,13 @@ def test_um_item_de_possivel_duplicidade_grao_nobre_omie_e_protheus(resultado: R
 
     assert item.motivo is Motivo.POSSIVEL_DUPLICIDADE
     assert {titulo.sistema_de_origem for titulo in item.titulos} == {"Omie", "Protheus"}
-    assert all("grao nobre" in titulo.cliente.lower() for titulo in item.titulos)
+    assert all("grao nobre" in titulo.nome_do_franqueado.lower() for titulo in item.titulos)
 
 
 def test_lista_de_cobranca_com_norte_panificados(resultado: Resultado) -> None:
     [titulo] = resultado.lista_de_cobranca
 
-    assert titulo.titulo.cliente.lower().startswith("norte panificados")
+    assert titulo.titulo.nome_do_franqueado.lower().startswith("norte panificados")
     assert titulo.saldo_centavos == _centavos("8.120,00")
 
 
@@ -216,15 +219,16 @@ def test_nove_titulos_em_analise(resultado: Resultado) -> None:
     assert len(resultado.em_analise) == 9
 
 
-def _identificadores_da_amostra() -> set[str]:
-    def linhas(padrao: str, separador: str) -> list[dict[str, str]]:
-        [arquivo] = AMOSTRA.glob(padrao)
-        with arquivo.open(encoding="utf-8") as conteudo:
-            return list(csv.DictReader(conteudo, delimiter=separador))
+def _linhas(padrao: str, separador: str) -> list[dict[str, str]]:
+    [arquivo] = AMOSTRA.glob(padrao)
+    with arquivo.open(encoding="utf-8") as conteudo:
+        return list(csv.DictReader(conteudo, delimiter=separador))
 
-    protheus = linhas("*protheus*.csv", ";")
-    omie = linhas("*omie*.csv", ",")
-    extrato = linhas("*extrato*.csv", ";")
+
+def _identificadores_da_amostra() -> set[str]:
+    protheus = _linhas("*protheus*.csv", ";")
+    omie = _linhas("*omie*.csv", ",")
+    extrato = _linhas("*extrato*.csv", ";")
     nomes = [linha["cliente"] for linha in protheus] + [linha["customer_name"] for linha in omie]
     for linha in extrato:
         for prefixo in ExtratoItau.historicos_com_nome_do_pagador:
@@ -265,3 +269,50 @@ def test_nenhum_nome_valor_ou_numero_de_nota_da_amostra_no_codigo_de_producao() 
     }
 
     assert encontrados == set()
+
+
+def _sem_acento(texto: str) -> str:
+    return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+
+
+def _palavras(texto: str) -> set[str]:
+    return set(re.findall(r"[^\W\d_]+", _sem_acento(texto).upper()))
+
+
+def _palavras_distintivas_da_amostra() -> set[str]:
+    arquivos = [("*protheus*.csv", ";"), ("*omie*.csv", ","), ("*extrato*.csv", ";")]
+    protheus, omie, extrato = (_linhas(padrao, separador) for padrao, separador in arquivos)
+    cabecalhos = {campo for linhas in (protheus, omie, extrato) for campo in linhas[0]}
+    inicios_de_layout = [inicio for inicio, _ in ExtratoItau.canais_pelo_inicio_do_historico]
+    com_nome = ExtratoItau.historicos_com_nome_do_pagador
+    textos = [linha["cliente"] for linha in protheus] + [linha["customer_name"] for linha in omie]
+    for historico in (linha["historico"] for linha in extrato):
+        prefixo = next((p for p in com_nome if historico.startswith(p)), None)
+        if prefixo:
+            textos.append(historico.removeprefix(prefixo))
+        elif not any(historico.startswith(inicio) for inicio in inicios_de_layout):
+            textos.append(historico)
+    linguagem_do_dominio = _palavras((RAIZ / "CONTEXT.md").read_text(encoding="utf-8"))
+    layout = _palavras(" ".join([*cabecalhos, *inicios_de_layout, *com_nome]))
+    return {
+        palavra
+        for texto in textos
+        for palavra in _palavras(texto)
+        if len(palavra) >= 4 and palavra not in DESIGNACOES_DE_RAZAO_SOCIAL | linguagem_do_dominio | layout
+    }
+
+
+def test_nenhuma_palavra_distintiva_dos_nomes_e_historicos_da_amostra_nos_textos_do_codigo_de_producao() -> None:
+    palavras = _palavras_distintivas_da_amostra()
+    assert {"PADARIA", "CANTINHO", "SABOR", "PACOTE", "FORNECEDOR"} <= palavras
+
+    encontradas = {
+        (arquivo.relative_to(RAIZ).as_posix(), palavra, literal.value)
+        for arquivo in CODIGO_DE_PRODUCAO.rglob("*.py")
+        for literal in ast.walk(ast.parse(arquivo.read_text(encoding="utf-8")))
+        if isinstance(literal, ast.Constant) and isinstance(literal.value, str)
+        for palavra in palavras
+        if re.search(rf"\b(?:{palavra}|{palavra.capitalize()})\b", _sem_acento(literal.value))
+    }
+
+    assert encontradas == set()

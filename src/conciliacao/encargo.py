@@ -26,7 +26,7 @@ class Enquadramento(Enum):
 
 
 @dataclass(frozen=True)
-class Pagamento:
+class CreditoEnquadrado:
     enquadramento: Enquadramento
     principal_centavos: int
     encargo_pago_centavos: int
@@ -64,7 +64,7 @@ class Pagamento:
                 )
 
 
-def enquadrar(titulo: Titulo, valor_centavos: int, data: date, parametros: ParametrosDeEncargo) -> Pagamento:
+def enquadrar(titulo: Titulo, valor_centavos: int, data: date, parametros: ParametrosDeEncargo) -> CreditoEnquadrado:
     efetivo = vencimento_efetivo(titulo.vencimento)
     dias_de_atraso = (data - efetivo).days
     previsto = _encargo_previsto(titulo.valor_centavos, dias_de_atraso, parametros) if dias_de_atraso > 0 else 0
@@ -77,7 +77,7 @@ def enquadrar(titulo: Titulo, valor_centavos: int, data: date, parametros: Param
         enquadramento = Enquadramento.DENTRO_DO_ENCARGO
     else:
         enquadramento = Enquadramento.VALOR_A_MAIOR
-    return Pagamento(
+    return CreditoEnquadrado(
         enquadramento=enquadramento,
         principal_centavos=titulo.valor_centavos,
         encargo_pago_centavos=max(diferenca, 0),

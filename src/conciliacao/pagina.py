@@ -315,7 +315,7 @@ def _cobranca(titulos: Sequence[TituloNaCobranca], candidatos_de: Resultado | No
         celulas = [
             titulo.documento,
             titulo.sistema_de_origem,
-            titulo.cliente,
+            titulo.nome_do_franqueado,
             titulo.cnpj,
             f"{titulo.vencimento:%d/%m/%Y}",
             f"{vencimento_efetivo(titulo.vencimento):%d/%m/%Y}",
