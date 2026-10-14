@@ -1,3 +1,4 @@
+import re
 import tomllib
 from dataclasses import dataclass
 from decimal import Decimal
@@ -25,12 +26,18 @@ class ConfiguracaoDaIa:
 
 
 @dataclass(frozen=True)
+class ConfiguracaoDeMigracao:
+    franqueados: frozenset[str]
+
+
+@dataclass(frozen=True)
 class Configuracao:
     contas: tuple[ContaDeExtrato, ...]
     encargo: ParametrosDeEncargo = ParametrosDeEncargo()
     limite_de_combinacoes: int = 100_000
     ia: ConfiguracaoDaIa | None = None
     limite_de_queda: Decimal = Decimal("10")
+    migracao: ConfiguracaoDeMigracao | None = None
 
 
 def carregar_configuracao(caminho: Path) -> Configuracao:
@@ -48,7 +55,27 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
         limite_de_combinacoes=_limite_de_combinacoes(caminho, dados.get("somas", {})),
         ia=_ia(caminho, dados["ia"]) if "ia" in dados else None,
         limite_de_queda=_limite_de_queda(caminho, dados.get("resumo", {})),
+        migracao=_migracao(caminho, dados["migracao"]) if "migracao" in dados else None,
     )
+
+
+_RAIZ_DO_CNPJ = re.compile(r"\d{8}")
+
+
+def _migracao(caminho: Path, migracao: object) -> ConfiguracaoDeMigracao:
+    if not isinstance(migracao, dict):
+        raise ConfiguracaoInvalida(f"{caminho}: [migracao] precisa ser uma seção")
+    desconhecidos = sorted(set(migracao) - {"franqueados"})
+    if desconhecidos:
+        raise ConfiguracaoInvalida(f"{caminho}: [migracao] não conhece {', '.join(desconhecidos)}; use franqueados")
+    franqueados = migracao.get("franqueados")
+    if not isinstance(franqueados, list) or not all(
+        isinstance(raiz, str) and _RAIZ_DO_CNPJ.fullmatch(raiz) for raiz in franqueados
+    ):
+        raise ConfiguracaoInvalida(
+            f"{caminho}: [migracao] franqueados precisa ser uma lista de raízes de CNPJ, 8 dígitos sem pontuação"
+        )
+    return ConfiguracaoDeMigracao(franqueados=frozenset(franqueados))
 
 
 def _limite_de_queda(caminho: Path, resumo: object) -> Decimal:

@@ -29,3 +29,14 @@ tempo_limite_segundos = 120
 # pontos percentuais em relação à execução anterior. O limiar de "queda grande" ainda não foi confirmado com o cliente.
 [resumo]
 limite_de_queda_pontos_percentuais = 10
+
+# Fase 2 (Cobrança identificada). Sem esta seção nada da fase 2 executa: o comando emitir-cobrancas não emite e
+# arquivos de Pix recebidos são recusados. Os Franqueados migrados são dados pela raiz do CNPJ (8 dígitos). O arquivo de
+# Pix recebidos da API Pix (JSON) precisa casar com uma [[contas]] própria, que diz o banco e a conta que recebeu.
+# [migracao]
+# franqueados = ["00000000"]
+#
+# [[contas]]
+# padrao = "*pix_recebidos*.json"
+# banco = "itau"
+# conta = "conta-principal-cobranca"

@@ -2,11 +2,14 @@ import re
 import unicodedata
 from datetime import date, datetime
 from fractions import Fraction
+from zoneinfo import ZoneInfo
 
 _VALOR_PTBR = re.compile(r"\d{1,3}(\.\d{3})*,\d{2}")
 _VALOR_COM_PONTO = re.compile(r"\d+\.\d{2}")
 _DATA_PTBR = re.compile(r"\d{2}/\d{2}/\d{4}")
 _DATA_ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
+_HORARIO_RFC_3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
+_FUSO_DOS_EXTRATOS = ZoneInfo("America/Sao_Paulo")
 _CNPJ_SEM_PONTUACAO = re.compile(r"\d{14}")
 _CNPJ = r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14}"
 _CNPJ_INTEIRO = re.compile(_CNPJ)
@@ -40,6 +43,16 @@ def data_iso(texto: str) -> date:
     if not _DATA_ISO.fullmatch(texto):
         raise FormatoInvalido(f"data '{texto}' não está no formato aaaa-mm-dd")
     return _data(texto, "%Y-%m-%d")
+
+
+def data_do_horario(texto: str) -> date:
+    if not _HORARIO_RFC_3339.fullmatch(texto):
+        raise FormatoInvalido(f"horário '{texto}' não está no formato aaaa-mm-ddThh:mm:ss com fuso (RFC 3339)")
+    try:
+        horario = datetime.fromisoformat(texto)
+    except ValueError as erro:
+        raise FormatoInvalido(f"horário '{texto}' não existe") from erro
+    return horario.astimezone(_FUSO_DOS_EXTRATOS).date()
 
 
 def _data(texto: str, formato: str) -> date:

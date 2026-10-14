@@ -68,6 +68,7 @@ class TipoDeEvidencia(StrEnum):
     SO_VALOR = "só valor"
     PARECER_DE_LLM = "parecer de LLM"
     PAGADOR_CONHECIDO = "Pagador conhecido"
+    IDENTIFICADOR_DE_COBRANCA = "Identificador de cobrança"
 
 
 class RegraDaProposta(StrEnum):
@@ -76,6 +77,7 @@ class RegraDaProposta(StrEnum):
     DOCUMENTO_E_SOMA_EXATA = "CNPJ/CPF + soma exata com uma única combinação"
     PAGADOR_CONHECIDO_E_VALOR_UNICO = "nome de Pagador conhecido + Valor único"
     PAGADOR_CONHECIDO_E_SOMA_EXATA = "nome de Pagador conhecido + soma exata com uma única combinação"
+    IDENTIFICADOR_E_VALOR = "Identificador de cobrança + valor exato ou dentro do Encargo"
 
 
 class TipoDeDecisao(StrEnum):
@@ -202,6 +204,51 @@ class Lancamento:
             self.documento,
             self.ordinal,
         )
+
+
+class TipoDeIdentificador(StrEnum):
+    TXID = "txid"
+
+
+class OrigemDoIdentificador(StrEnum):
+    PLATAFORMA = "plataforma"
+
+
+type ChaveDoIdentificador = tuple[TipoDeIdentificador, str]
+
+
+@dataclass(frozen=True)
+class VinculoDeCobranca:
+    tipo: TipoDeIdentificador
+    identificador: str
+    origem: OrigemDoIdentificador
+    sistema_de_origem: str
+    documento: str
+    cnpj: str
+    valor_centavos: int
+    vencimento: date
+
+    @property
+    def chave(self) -> ChaveDoIdentificador:
+        return (self.tipo, self.identificador)
+
+    def descrever(self) -> str:
+        return f"{self.tipo.value} {self.identificador} (Identificador de cobrança de origem {self.origem.value})"
+
+
+@dataclass(frozen=True)
+class RetornoDeCobranca:
+    tipo: TipoDeIdentificador
+    chave_natural: str
+    identificador: str
+    banco: str
+    conta: str
+    data: date
+    valor_centavos: int
+
+    @property
+    def chave_do_identificador(self) -> ChaveDoIdentificador:
+        return (self.tipo, self.identificador)
 
 
 @dataclass(frozen=True)

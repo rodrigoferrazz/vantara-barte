@@ -672,3 +672,45 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
   - `gemma3:4b` e `phi3.5` não foram medidos: o disco da máquina tinha cerca de 2 GB livres, e cada modelo foi baixado, medido e removido em seguida (`llama3.2:3b` e `phi4-mini`), ficando só o `qwen2.5:3b` que já existia e o `qwen3:4b` escolhido.
 - **Por quê:** decisão do usuário ("melhora o prompt com exemplos genéricos, sem nada da amostra, e testa outros modelos de 3 a 4B. Registra cada tentativa no arquivo de decisões"). A spec (módulo 6, linha 164) pede modelo de 3 a 4B quantizado que caiba no M2 de 8 GB, e o ADR 0003 deixa a LLM só no parecer, sempre na Fila. O critério foi o conjunto fictício, priorizando poucos falsos positivos, coerente com a postura conservadora (um "sim" errado vira "pagador provável, primeira vez" falso; um "não" errado só muda o Motivo e mantém a sugestão por valor). `qwen3:4b` com `nome-v2` empata com `nome-v1` no menor número de falsos positivos e no maior número de acertos, e é cerca de quatro vezes mais rápido. A saída palavra por palavra piorou todos os modelos menos o `phi4-mini`, que ainda ficou atrás.
 - **Alternativas:** manter `qwen2.5:3b` com `nome-v1` (2 falsos positivos e 8 falsos negativos); `phi4-mini` com `nome-v4` (26 acertos, 2 falsos positivos, mais lento); `qwen3:4b` com o modo de raciocínio ligado (não medido: gera o raciocínio antes de cada resposta, bem mais lento, e o modelo já não tem falso negativo no conjunto); conferir em código as correspondências palavra por palavra do `nome-v3` e transformar em "não" as incoerentes (o código passaria a decidir sobre o nome, além do pedido); exemplos com nomes da amostra (proibido e seria ajustar a regra ao exemplo).
+
+## Fase 2, ticket 01: formato e sequência do txid
+
+- **Decisão:** o txid é `CI` seguido de um sequencial de 30 dígitos com zeros à esquerda (32 caracteres, dentro do `[a-zA-Z0-9]{26,35}` da `cobv`). O sequencial é a quantidade de txids já gerados no armazenamento mais um; vínculos nunca são apagados e a tabela tem unicidade por tipo e identificador e por tipo e Título, então um txid nunca é reaproveitado e um Título nunca ganha dois.
+- **Por quê:** determinístico (a mesma emissão gera os mesmos txids, o que o simulador do ticket 05 precisa para "mesma semente, mesmos arquivos") e a garantia de não reaproveitar fica no próprio armazenamento. O prefixo separa o txid do nosso número na leitura.
+- **Alternativas:** txid aleatório (não reproduzível); derivar do Título (reemissão futura repetiria o identificador).
+
+## Fase 2, ticket 01: Cobrança identificada só depois do envio
+
+- **Decisão:** a emissão grava o vínculo numa transação própria antes de chamar a porta e marca o envio depois que a porta aceita, uma cobrança por vez. Um Título tem Cobrança identificada quando o vínculo foi enviado; se a porta falhar, a próxima emissão reenvia o mesmo txid, sem gerar outro.
+- **Por quê:** a spec manda gravar o vínculo antes da porta (um pagamento nunca chega sem vínculo) e não duplicar ao emitir de novo. Sem marcar o envio, uma falha da porta deixaria o Título com vínculo e sem cobrança, e nenhuma emissão seguinte o enviaria.
+- **Alternativas:** gravar o vínculo e chamar a porta na mesma transação (a falha da porta apagaria o vínculo de uma cobrança que pode ter saído); considerar o vínculo como Cobrança identificada mesmo sem envio (perderia a cobrança em silêncio).
+
+## Fase 2, ticket 01: Títulos em aberto e valor emitido
+
+- **Decisão:** a emissão lê a última exportação de cada Sistema de origem, tira os Títulos cancelados na origem por decisão de mesma dívida e usa o Saldo (valor menos baixas confirmadas ainda não absorvidas pelo ERP, como na execução); Título com Saldo zero não é emitido e o valor emitido é o Saldo. A Data de referência é calculada como na execução, pelas últimas datas dos Extratos das contas configuradas; sem ela (conta configurada sem Extrato) nada é emitido. O vencimento enviado é o do Título; o Vencimento efetivo só decide se ele está vencido.
+- **Por quê:** "Título em aberto" já tem esse significado na fase 1 (Saldo maior que zero) e o motor compara o Crédito com o Saldo, então a cobrança pede o que o motor espera receber. Sem Data de referência não há como saber o que está vencido, e a spec deixa vencidos fora da emissão.
+- **Alternativas:** emitir pelo valor do Título no ERP (cobraria de novo a parte já confirmada); usar a data do computador (contra a definição de Data de referência).
+
+## Fase 2, ticket 01: o que a porta recebe e multa e juros
+
+- **Decisão:** a porta recebe, por cobrança, só o Título (Sistema de origem e documento), o valor, o vencimento, o CNPJ do Franqueado e o txid. Multa e juros da `cobv` (história 11) não vão na chamada: são parâmetros da plataforma, e o adaptador da porta recebe o Encargo da configuração quando for construído (o simulado ainda não usa; entra no ticket 05).
+- **Por quê:** o ticket diz que a porta recebe só esses dados, e a história 11 diz que multa e juros vêm do Encargo da fase 1; passar o Encargo ao adaptador atende as duas sem repetir o mesmo parâmetro em cada cobrança.
+- **Alternativas:** multa e juros em cada cobrança (contra o "só" do ticket).
+
+## Fase 2, ticket 01: arquivo de Pix recebidos
+
+- **Decisão:** com `[migracao]` na configuração, um arquivo é de Pix recebidos quando é JSON com exatamente as chaves `parametros` e `pix`, como a resposta de `GET /pix` da API Pix. Cada Pix aceita só os campos da spec (`endToEndId`, `txid`, `valor`, `componentesValor`, `chave`, `horario`, `infoPagador`, `devolucoes`, `pagador`) e exige `endToEndId`, `valor` (`1234.56`) e `horario` (RFC 3339 com fuso); campo desconhecido ou faltando recusa o arquivo inteiro com o motivo. Pix sem txid não é Retorno de cobrança e é ignorado. A data do crédito é o horário convertido para o fuso de Brasília (`America/Sao_Paulo`), porque a API devolve UTC e o Extrato traz a data local. Banco e conta vêm de uma `[[contas]]` cujo padrão casa com o nome do arquivo, como nos Extratos; a configuração precisa de uma entrada para o arquivo de Pix. Sem `[migracao]`, o adaptador fica desligado e o arquivo é recusado como layout desconhecido, como na fase 1.
+- **Por quê:** ADR 0005 (layout exato, identificação pelo conteúdo, recusa por arquivo) e a spec (banco e conta pela mesma configuração por nome de arquivo; sem configuração de migração nada da fase 2 executa). Um Pix das 22h em Brasília vem como dia seguinte em UTC e não casaria com o Crédito.
+- **Alternativas:** aceitar campos a mais (inferir layout); usar a data UTC; um padrão de nome fixo para o arquivo.
+
+## Fase 2, ticket 01: enriquecimento guardado
+
+- **Decisão:** os Retornos lidos são guardados (únicos por tipo e `endToEndId`) e cada execução tenta ligar os que ainda não têm Crédito aos Créditos vivos ainda não enriquecidos, pelo par conta, data e valor; só liga quando o par tem um Retorno e um Crédito. A ligação fica guardada, então o Crédito continua identificado nas execuções seguintes sem o arquivo na pasta, e reimportar o mesmo arquivo não duplica. Retorno nunca vira lançamento: não entra na conferência de soma nem na Data de referência.
+- **Por quê:** os Créditos são reclassificados a cada execução; sem guardar a ligação, o Crédito voltaria ao caminho da fase 1 na execução seguinte. Guardar os Retornos e retentar os sem par adianta parte do ticket 04, que continua com o Resumo dos Retornos pendentes e o desempate pelo pagador.
+- **Alternativas:** enriquecer só com o arquivo da execução (resultado mudaria de uma execução para outra).
+
+## Fase 2, ticket 01: Identificador de cobrança no motor
+
+- **Decisão:** o Crédito enriquecido cujo txid tem vínculo com um Título em aberto segue a mesma regra de valor do nosso número da fase 1 (as duas usam agora o mesmo código): exato ou dentro do Encargo vai para a Lista de baixa com a regra "Identificador de cobrança + valor exato ou dentro do Encargo"; fora disso vai para a Fila com "valor não fecha" apontando o Título. A evidência é "Identificador de cobrança" e a explicação começa por "txid ... (Identificador de cobrança de origem plataforma) é do Título ...". O identificador é olhado antes de qualquer outra evidência. Identificador sem vínculo ou de Título que não está em aberto ainda segue o caminho da fase 1; os casos da spec para eles ("Possível fonte não integrada" e "Crédito sem título em aberto") ficam para o ticket 02.
+- **Por quê:** a spec põe o identificador no mesmo nível do nosso número e com a mesma regra de valor; aplicar só o "valor exato" do ticket seria recortar a regra para caber no exemplo. Os dois casos de borda têm ticket próprio e um deles toca uma decisão da fase 1 (ver comentário no ticket).
+- **Alternativas:** só o valor exato neste ticket; já tratar os casos de borda aqui.

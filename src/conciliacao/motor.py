@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 from conciliacao.dominio import (
     Canal,
+    ChaveDoIdentificador,
     ChaveNatural,
     Classificacao,
     Destino,
@@ -18,10 +19,12 @@ from conciliacao.dominio import (
     RegraDaProposta,
     PossivelDuplicidade,
     Resposta,
+    RetornoDeCobranca,
     TipoDeDecisao,
     TipoDeEvidencia,
     Titulo,
     TituloNaCobranca,
+    VinculoDeCobranca,
 )
 from conciliacao.calendario import somar_dias_uteis, vencimento_efetivo
 from conciliacao.encargo import CreditoEnquadrado, ParametrosDeEncargo, enquadrar
@@ -100,6 +103,9 @@ class _Titulos:
     limite_de_combinacoes: int
     parecerista: PareceristaDeNome
     conhecidos: dict[str, PagadorConhecido]
+    retornos: Mapping[ChaveNatural, RetornoDeCobranca]
+    vinculos: Mapping[ChaveDoIdentificador, VinculoDeCobranca]
+    por_chave: dict[tuple[str, str], Titulo]
 
     @property
     def franqueados(self) -> set[str]:
@@ -180,6 +186,8 @@ def conciliar(
     antecipacoes: Mapping[ChaveNatural, datetime],
     fontes_nao_integradas: Mapping[ChaveNatural, datetime],
     divergencias: Mapping[ChaveNatural, list[str]],
+    retornos: Mapping[ChaveNatural, RetornoDeCobranca],
+    vinculos: Mapping[ChaveDoIdentificador, VinculoDeCobranca],
 ) -> list[Classificacao]:
     todos = list(titulos)
     nomes = _nomes_dos_franqueados(franqueados, todos)
@@ -202,6 +210,9 @@ def conciliar(
             limite_de_combinacoes,
             parecerista,
             conhecidos,
+            retornos,
+            vinculos,
+            {(titulo.sistema_de_origem, titulo.documento): titulo for titulo in titulos},
         )
 
     rejeitados: dict[ChaveNatural, list[ParRejeitado]] = defaultdict(list)
@@ -411,6 +422,8 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
             titulos=(),
             explicacao="Débito do Extrato; não é Crédito de Franqueado.",
         )
+    if identificado := _por_identificador(lancamento, abertos):
+        return identificado
     candidatos = abertos.por_nosso_numero.get(lancamento.documento, []) if lancamento.documento else []
     if len(candidatos) == 1:
         return _por_nosso_numero(lancamento, candidatos[0], abertos.encargo)
@@ -806,9 +819,43 @@ def _documentos(titulos: list[Titulo]) -> str:
 
 
 def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: ParametrosDeEncargo) -> Classificacao:
+    return _pelo_titulo_apontado(
+        lancamento,
+        titulo,
+        f"Nosso número {titulo.nosso_numero}",
+        TipoDeEvidencia.NOSSO_NUMERO,
+        RegraDaProposta.NOSSO_NUMERO_E_VALOR,
+        encargo,
+    )
+
+
+def _por_identificador(lancamento: Lancamento, abertos: _Titulos) -> Classificacao | None:
+    retorno = abertos.retornos.get(lancamento.chave_natural)
+    vinculo = abertos.vinculos.get(retorno.chave_do_identificador) if retorno else None
+    titulo = abertos.por_chave.get((vinculo.sistema_de_origem, vinculo.documento)) if vinculo else None
+    if vinculo is None or titulo is None:
+        return None
+    return _pelo_titulo_apontado(
+        lancamento,
+        titulo,
+        vinculo.descrever(),
+        TipoDeEvidencia.IDENTIFICADOR_DE_COBRANCA,
+        RegraDaProposta.IDENTIFICADOR_E_VALOR,
+        abertos.encargo,
+    )
+
+
+def _pelo_titulo_apontado(
+    lancamento: Lancamento,
+    titulo: Titulo,
+    identificador: str,
+    evidencia: TipoDeEvidencia,
+    regra: RegraDaProposta,
+    encargo: ParametrosDeEncargo,
+) -> Classificacao:
     enquadrado = enquadrar(titulo, lancamento.valor_centavos, lancamento.data, encargo)
     identificacao = (
-        f"Nosso número {titulo.nosso_numero} é do Título {titulo.documento} ({titulo.sistema_de_origem}); "
+        f"{identificador} é do Título {titulo.documento} ({titulo.sistema_de_origem}); "
         f"valor {formatar_reais(lancamento.valor_centavos)}: {enquadrado.descrever()}."
     )
     if enquadrado.fecha:
@@ -817,9 +864,9 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
             destino=Destino.LISTA_DE_BAIXA,
             titulos=(titulo,),
             explicacao=identificacao,
-            evidencia=(TipoDeEvidencia.NOSSO_NUMERO,),
+            evidencia=(evidencia,),
             franqueado=titulo.franqueado,
-            regra=RegraDaProposta.NOSSO_NUMERO_E_VALOR,
+            regra=regra,
         )
     return Classificacao(
         lancamento=lancamento,
@@ -827,6 +874,6 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
         titulos=(titulo,),
         explicacao=identificacao,
         motivo=MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
-        evidencia=(TipoDeEvidencia.NOSSO_NUMERO,),
+        evidencia=(evidencia,),
         franqueado=titulo.franqueado,
     )

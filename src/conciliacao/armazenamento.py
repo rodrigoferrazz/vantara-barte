@@ -9,6 +9,11 @@ from pathlib import Path
 
 from conciliacao.dominio import (
     ArquivoRecusado,
+    ChaveDoIdentificador,
+    OrigemDoIdentificador,
+    RetornoDeCobranca,
+    TipoDeIdentificador,
+    VinculoDeCobranca,
     ConfirmacaoEmVigor,
     ConfirmacaoRevertida,
     SituacaoNoErp,
@@ -256,6 +261,36 @@ CREATE TABLE IF NOT EXISTS limites_de_queda (
     execucao_id INTEGER NOT NULL UNIQUE REFERENCES execucoes(id),
     pontos_percentuais TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS vinculos_de_cobranca (
+    id INTEGER PRIMARY KEY,
+    tipo TEXT NOT NULL,
+    identificador TEXT NOT NULL,
+    origem TEXT NOT NULL,
+    sistema_de_origem TEXT NOT NULL,
+    documento TEXT NOT NULL,
+    cnpj TEXT NOT NULL,
+    valor_centavos INTEGER NOT NULL,
+    vencimento TEXT NOT NULL,
+    momento_da_emissao TEXT NOT NULL,
+    momento_do_envio TEXT,
+    UNIQUE (tipo, identificador),
+    UNIQUE (tipo, sistema_de_origem, documento)
+);
+CREATE TABLE IF NOT EXISTS retornos_de_cobranca (
+    id INTEGER PRIMARY KEY,
+    tipo TEXT NOT NULL,
+    chave_natural TEXT NOT NULL,
+    identificador TEXT NOT NULL,
+    banco TEXT NOT NULL,
+    conta TEXT NOT NULL,
+    data TEXT NOT NULL,
+    valor_centavos INTEGER NOT NULL,
+    UNIQUE (tipo, chave_natural)
+);
+CREATE TABLE IF NOT EXISTS enriquecimentos (
+    retorno_id INTEGER NOT NULL UNIQUE REFERENCES retornos_de_cobranca(id),
+    lancamento_id INTEGER NOT NULL UNIQUE REFERENCES lancamentos(id)
+);
 """
 
 _SEM_REVERSAO = "d.id NOT IN (SELECT confirmacao_id FROM reversoes)"
@@ -263,6 +298,10 @@ _EM_VIGOR = f"{_SEM_REVERSAO} AND d.id NOT IN (SELECT confirmacao_id FROM diverg
 
 _COLUNAS_LANCAMENTO = "banco, conta, data, natureza, valor_centavos, historico, documento, ordinal"
 _COLUNAS_DO_LANCAMENTO_L = ", ".join(f"l.{coluna}" for coluna in _COLUNAS_LANCAMENTO.split(", "))
+_COLUNAS_VINCULO = (
+    "tipo, identificador, origem, sistema_de_origem, documento, cnpj, valor_centavos, vencimento"
+)
+_COLUNAS_RETORNO = "r.tipo, r.chave_natural, r.identificador, r.banco, r.conta, r.data, r.valor_centavos"
 _COLUNAS_TITULO = (
     "t.sistema_de_origem, t.documento, t.nome_do_franqueado, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
 )
@@ -484,6 +523,88 @@ class Armazenamento:
             )
             titulos.extend(_titulo(linha) for linha in linhas)
         return titulos
+
+    def ultima_fotografia(self) -> list[Titulo]:
+        sistemas = self._conexao.execute("SELECT DISTINCT sistema_de_origem FROM exportacoes")
+        return self.fotografia_anterior(sistema for (sistema,) in sistemas.fetchall())
+
+    def identificadores_gerados(self, tipo: TipoDeIdentificador) -> int:
+        (quantidade,) = self._conexao.execute(
+            "SELECT COUNT(*) FROM vinculos_de_cobranca WHERE tipo = ?", (tipo.value,)
+        ).fetchone()
+        return int(quantidade)
+
+    def registrar_vinculo(self, vinculo: VinculoDeCobranca) -> None:
+        self._conexao.execute(
+            f"INSERT INTO vinculos_de_cobranca ({_COLUNAS_VINCULO}, momento_da_emissao)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                vinculo.tipo.value,
+                vinculo.identificador,
+                vinculo.origem.value,
+                vinculo.sistema_de_origem,
+                vinculo.documento,
+                vinculo.cnpj,
+                vinculo.valor_centavos,
+                vinculo.vencimento.isoformat(),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+
+    def registrar_envio(self, vinculo: VinculoDeCobranca) -> None:
+        self._conexao.execute(
+            "UPDATE vinculos_de_cobranca SET momento_do_envio = ? WHERE tipo = ? AND identificador = ?",
+            (datetime.now().isoformat(timespec="seconds"), vinculo.tipo.value, vinculo.identificador),
+        )
+
+    def vinculos_de_cobranca(self) -> list[VinculoDeCobranca]:
+        linhas = self._conexao.execute(f"SELECT {_COLUNAS_VINCULO} FROM vinculos_de_cobranca ORDER BY id")
+        return [_vinculo(linha) for linha in linhas]
+
+    def vinculos_enviados(self) -> set[ChaveDoIdentificador]:
+        linhas = self._conexao.execute(
+            "SELECT tipo, identificador FROM vinculos_de_cobranca WHERE momento_do_envio IS NOT NULL"
+        )
+        return {(TipoDeIdentificador(tipo), identificador) for tipo, identificador in linhas}
+
+    def guardar_retornos(self, retornos: Iterable[RetornoDeCobranca]) -> None:
+        self._conexao.executemany(
+            "INSERT OR IGNORE INTO retornos_de_cobranca"
+            " (tipo, chave_natural, identificador, banco, conta, data, valor_centavos) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    r.tipo.value,
+                    r.chave_natural,
+                    r.identificador,
+                    r.banco,
+                    r.conta,
+                    r.data.isoformat(),
+                    r.valor_centavos,
+                )
+                for r in retornos
+            ],
+        )
+
+    def retornos_sem_credito(self) -> list[RetornoDeCobranca]:
+        linhas = self._conexao.execute(
+            f"SELECT {_COLUNAS_RETORNO} FROM retornos_de_cobranca r"
+            " WHERE r.id NOT IN (SELECT retorno_id FROM enriquecimentos) ORDER BY r.id"
+        )
+        return [_retorno(linha) for linha in linhas]
+
+    def registrar_enriquecimento(self, retorno: RetornoDeCobranca, lancamento_id: int) -> None:
+        self._conexao.execute(
+            "INSERT INTO enriquecimentos (retorno_id, lancamento_id)"
+            " SELECT id, ? FROM retornos_de_cobranca WHERE tipo = ? AND chave_natural = ?",
+            (lancamento_id, retorno.tipo.value, retorno.chave_natural),
+        )
+
+    def retornos_dos_creditos(self) -> dict[ChaveNatural, RetornoDeCobranca]:
+        linhas = self._conexao.execute(
+            f"SELECT {_COLUNAS_DO_LANCAMENTO_L}, {_COLUNAS_RETORNO} FROM enriquecimentos e"
+            " JOIN lancamentos l ON l.id = e.lancamento_id JOIN retornos_de_cobranca r ON r.id = e.retorno_id"
+        )
+        return {_lancamento(linha[:8]).chave_natural: _retorno(linha[8:]) for linha in linhas}
 
     def titulos_propostos_na_ultima_execucao(self) -> set[tuple[str, str]]:
         linhas = self._conexao.execute(
@@ -1214,6 +1335,33 @@ def _titulo(linha: tuple[str, str, str, str, str | None, str, int]) -> Titulo:
         nosso_numero=nosso_numero,
         vencimento=date.fromisoformat(vencimento),
         valor_centavos=valor,
+    )
+
+
+def _vinculo(linha: Iterable[object]) -> VinculoDeCobranca:
+    tipo, identificador, origem, sistema, documento, cnpj, valor, vencimento = (str(campo) for campo in linha)
+    return VinculoDeCobranca(
+        tipo=TipoDeIdentificador(tipo),
+        identificador=identificador,
+        origem=OrigemDoIdentificador(origem),
+        sistema_de_origem=sistema,
+        documento=documento,
+        cnpj=cnpj,
+        valor_centavos=int(valor),
+        vencimento=date.fromisoformat(vencimento),
+    )
+
+
+def _retorno(linha: Iterable[object]) -> RetornoDeCobranca:
+    tipo, chave_natural, identificador, banco, conta, data, valor = (str(campo) for campo in linha)
+    return RetornoDeCobranca(
+        tipo=TipoDeIdentificador(tipo),
+        chave_natural=chave_natural,
+        identificador=identificador,
+        banco=banco,
+        conta=conta,
+        data=date.fromisoformat(data),
+        valor_centavos=int(valor),
     )
 
 

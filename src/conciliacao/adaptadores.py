@@ -1,18 +1,30 @@
 import csv
+import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeGuard
 
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
-from conciliacao.dominio import ArquivoRecusado, Canal, ChaveNatural, Lancamento, Natureza, Titulo
+from conciliacao.dominio import (
+    ArquivoRecusado,
+    Canal,
+    ChaveNatural,
+    Lancamento,
+    Natureza,
+    RetornoDeCobranca,
+    TipoDeIdentificador,
+    Titulo,
+)
 from conciliacao.normalizacao import (
     FormatoInvalido,
     centavos_de_valor_com_ponto,
     centavos_de_valor_ptbr,
     cnpj,
     cnpj_sem_pontuacao,
+    data_do_horario,
     data_iso,
     data_ptbr,
 )
@@ -29,6 +41,7 @@ class Leitura:
     arquivos_lidos: list[str] = field(default_factory=list)
     arquivos_recusados: list[ArquivoRecusado] = field(default_factory=list)
     sistemas_exportados: set[str] = field(default_factory=set)
+    retornos: list[RetornoDeCobranca] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -36,6 +49,7 @@ class ConteudoDoArquivo:
     titulos: list[Titulo] = field(default_factory=list)
     lancamentos: list[Lancamento] = field(default_factory=list)
     sistema_exportado: str | None = None
+    retornos: list[RetornoDeCobranca] = field(default_factory=list)
 
 
 class Adaptador(Protocol):
@@ -150,6 +164,55 @@ class ExtratoItau:
         return ConteudoDoArquivo(lancamentos=lancamentos)
 
 
+class PixRecebidos:
+    nome = "Pix recebidos da API Pix"
+    chaves_do_arquivo = frozenset({"parametros", "pix"})
+    campos_do_pix = frozenset(
+        {"endToEndId", "txid", "valor", "componentesValor", "chave", "horario", "infoPagador", "devolucoes", "pagador"}
+    )
+    campos_obrigatorios = ("endToEndId", "valor", "horario")
+    formato_do_txid = re.compile(r"[a-zA-Z0-9]{1,35}")
+
+    def reconhece(self, conteudo: object) -> TypeGuard[dict[str, object]]:
+        return isinstance(conteudo, dict) and set(conteudo) == self.chaves_do_arquivo
+
+    def ler(self, arquivo: Path, conteudo: dict[str, object], configuracao: Configuracao) -> ConteudoDoArquivo:
+        conta = _conta_do_extrato(arquivo, configuracao)
+        recebidos = conteudo["pix"]
+        if not isinstance(recebidos, list):
+            raise Recusa("'pix' não é uma lista")
+        retornos = []
+        for numero, recebido in enumerate(recebidos, start=1):
+            if not isinstance(recebido, dict):
+                raise Recusa(f"pix {numero}: não é um objeto")
+            desconhecidos = sorted(set(recebido) - self.campos_do_pix)
+            if desconhecidos:
+                raise Recusa(f"pix {numero}: campo desconhecido {_colunas(desconhecidos)}")
+            faltam = [
+                campo for campo in self.campos_obrigatorios if not (recebido.get(campo) and isinstance(recebido[campo], str))
+            ]
+            if faltam:
+                raise Recusa(f"pix {numero}: falta {_colunas(faltam)}")
+            txid = recebido.get("txid")
+            if txid is None:
+                continue
+            if not isinstance(txid, str) or not self.formato_do_txid.fullmatch(txid):
+                raise Recusa(f"pix {numero}: txid '{txid}' não tem de 1 a 35 letras e dígitos")
+            retornos.append(
+                RetornoDeCobranca(
+                    tipo=TipoDeIdentificador.TXID,
+                    chave_natural=recebido["endToEndId"],
+                    identificador=txid,
+                    banco=conta.banco,
+                    conta=conta.conta,
+                    data=_formato(numero, data_do_horario, recebido["horario"], local="pix"),
+                    valor_centavos=_formato(numero, centavos_de_valor_com_ponto, recebido["valor"], local="pix"),
+                )
+            )
+        return ConteudoDoArquivo(retornos=retornos)
+
+
+PIX_RECEBIDOS = PixRecebidos()
 EXTRATOS: tuple[ExtratoItau, ...] = (ExtratoItau(),)
 ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), OmieTitulos(), *EXTRATOS)
 
@@ -175,6 +238,7 @@ def ler_pasta(pasta: Path, configuracao: Configuracao) -> Leitura:
             leitura.arquivos_lidos.append(arquivo.name)
             leitura.titulos.extend(conteudo.titulos)
             leitura.lancamentos.extend(conteudo.lancamentos)
+            leitura.retornos.extend(conteudo.retornos)
             if conteudo.sistema_exportado is not None:
                 leitura.sistemas_exportados.add(conteudo.sistema_exportado)
     return leitura
@@ -187,6 +251,8 @@ def _ler_arquivo(arquivo: Path, configuracao: Configuracao) -> ConteudoDoArquivo
         raise Recusa("o arquivo não é texto UTF-8") from None
     if not texto.strip():
         raise Recusa("o arquivo está vazio")
+    if configuracao.migracao is not None and PIX_RECEBIDOS.reconhece(conteudo := _json(texto)):
+        return PIX_RECEBIDOS.ler(arquivo, conteudo, configuracao)
     for adaptador in ADAPTADORES:
         linhas = _linhas(texto, adaptador)
         if tuple(linhas[0]) == adaptador.cabecalho:
@@ -196,6 +262,13 @@ def _ler_arquivo(arquivo: Path, configuracao: Configuracao) -> ConteudoDoArquivo
                     raise Recusa(f"linha {numero}: {len(linha)} colunas, o layout tem {len(adaptador.cabecalho)}")
             return adaptador.ler(arquivo, corpo, configuracao)
     raise Recusa(_motivo_do_cabecalho_desconhecido(arquivo, texto, configuracao))
+
+
+def _json(texto: str) -> object:
+    try:
+        return json.loads(texto)
+    except ValueError:
+        return None
 
 
 def _linhas(texto: str, adaptador: Adaptador) -> list[list[str]]:
@@ -248,11 +321,11 @@ def _conta_do_extrato(arquivo: Path, configuracao: Configuracao) -> ContaDeExtra
     return contas[0]
 
 
-def _formato[T](numero: int, conversor: "Conversor[T]", texto: str) -> T:
+def _formato[T](numero: int, conversor: "Conversor[T]", texto: str, local: str = "linha") -> T:
     try:
         return conversor(texto)
     except FormatoInvalido as erro:
-        raise Recusa(f"linha {numero}: {erro}") from None
+        raise Recusa(f"{local} {numero}: {erro}") from None
 
 
 class Conversor[T](Protocol):

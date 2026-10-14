@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -10,15 +10,20 @@ from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
 from conciliacao.decisoes import aplicar_decisoes
 from conciliacao.dominio import (
+    ChaveDoIdentificador,
+    ChaveNatural,
     Classificacao,
     DataDeReferencia,
     Lancamento,
     Natureza,
     Resultado,
+    RetornoDeCobranca,
     TipoDeDecisao,
     Titulo,
     UltimaDataDaConta,
+    VinculoDeCobranca,
 )
+from conciliacao.enriquecimento import enriquecer
 from conciliacao.motor import Motor, conciliar, lista_de_cobranca, possiveis_duplicidades
 from conciliacao.parecerista import PareceristaDeNome
 
@@ -58,6 +63,7 @@ def executar_conciliacao(
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
+        retornos, vinculos = _cobranca_identificada(armazenamento, configuracao, leitura.retornos, lancamentos)
         pelo_saldo = motor(
             titulos,
             lancamentos.values(),
@@ -72,17 +78,13 @@ def executar_conciliacao(
             antecipacoes=armazenamento.classificados_como(TipoDeDecisao.ANTECIPACAO),
             fontes_nao_integradas=armazenamento.classificados_como(TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA),
             divergencias=armazenamento.divergencias(),
+            retornos=retornos,
+            vinculos=vinculos,
         )
         classificacoes = [_com_titulos_da_exportacao(c, originais) for c in pelo_saldo]
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
-        ultimas_datas = armazenamento.ultimas_datas()
-        data_de_referencia = DataDeReferencia(
-            tuple(
-                UltimaDataDaConta(banco, conta, ultimas_datas.get((banco, conta)))
-                for banco, conta in dict.fromkeys((c.banco, c.conta) for c in configuracao.contas)
-            )
-        )
+        data_de_referencia = calcular_data_de_referencia(armazenamento, configuracao)
         decididas = armazenamento.duplicidades_decididas()
         duplicidades = [d for d in possiveis_duplicidades(na_exportacao) if d.chave not in decididas]
         cobranca = [
@@ -110,6 +112,34 @@ def executar_conciliacao(
             conflitos_das_decisoes=decisoes.lidas.conflitos,
         )
     return armazenamento.carregar_resultado(execucao)
+
+
+def calcular_data_de_referencia(armazenamento: Armazenamento, configuracao: Configuracao) -> DataDeReferencia:
+    ultimas_datas = armazenamento.ultimas_datas()
+    return DataDeReferencia(
+        tuple(
+            UltimaDataDaConta(banco, conta, ultimas_datas.get((banco, conta)))
+            for banco, conta in dict.fromkeys((c.banco, c.conta) for c in configuracao.contas)
+        )
+    )
+
+
+def _cobranca_identificada(
+    armazenamento: Armazenamento,
+    configuracao: Configuracao,
+    lidos: Iterable[RetornoDeCobranca],
+    lancamentos: Mapping[int, Lancamento],
+) -> tuple[dict[ChaveNatural, RetornoDeCobranca], dict[ChaveDoIdentificador, VinculoDeCobranca]]:
+    if configuracao.migracao is None:
+        return {}, {}
+    armazenamento.guardar_retornos(lidos)
+    enriquecidos = armazenamento.retornos_dos_creditos()
+    id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
+    livres = [lancamento for lancamento in lancamentos.values() if lancamento.chave_natural not in enriquecidos]
+    for retorno, credito in enriquecer(armazenamento.retornos_sem_credito(), livres):
+        armazenamento.registrar_enriquecimento(retorno, id_por_chave[credito.chave_natural])
+    vinculos = {vinculo.chave: vinculo for vinculo in armazenamento.vinculos_de_cobranca()}
+    return armazenamento.retornos_dos_creditos(), vinculos
 
 
 def _com_titulos_da_exportacao(
