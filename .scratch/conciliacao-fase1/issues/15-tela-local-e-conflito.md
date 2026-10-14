@@ -6,14 +6,14 @@
 
 **Status:** ready-for-agent
 
-- [ ] Um comando abre a tela local, sem servidor externo, sem build de frontend e sem recursos externos (funciona offline)
-- [ ] A tela lê o resultado persistido da última execução e não recalcula nada; totais e itens batem com o workbook da mesma execução
-- [ ] Resumo da execução no topo: lidos, recusados, resolvido sozinho, estado da IA, conta que segura a Data de referência, conflitos
-- [ ] Lista de baixa e Fila mostram, por item, Crédito, Título(s), evidência, explicação e Motivo
-- [ ] Itens com parecer da IA têm o parecer destacado visualmente, com a explicação e a marcação "IA indisponível" quando for o caso
-- [ ] Lista de cobrança aparece separada dos Títulos em análise
-- [ ] Causa raiz com gráfico de barras simples por Motivo (quantidade e valor), desenhado no servidor sem biblioteca externa, mais a agregação por Franqueado
-- [ ] Sem execução, a tela diz que não há execução; lista vazia aparece como vazia; nenhum dado de exemplo ou placeholder
+- [x] Um comando abre a tela local, sem servidor externo, sem build de frontend e sem recursos externos (funciona offline)
+- [x] A tela lê o resultado persistido da última execução e não recalcula nada; totais e itens batem com o workbook da mesma execução
+- [x] Resumo da execução no topo: lidos, recusados, resolvido sozinho, estado da IA, conta que segura a Data de referência, conflitos
+- [x] Lista de baixa e Fila mostram, por item, Crédito, Título(s), evidência, explicação e Motivo
+- [x] Itens com parecer da IA têm o parecer destacado visualmente, com a explicação e a marcação "IA indisponível" quando for o caso
+- [x] Lista de cobrança aparece separada dos Títulos em análise
+- [x] Causa raiz com gráfico de barras simples por Motivo (quantidade e valor), desenhado no servidor sem biblioteca externa, mais a agregação por Franqueado
+- [x] Sem execução, a tela diz que não há execução; lista vazia aparece como vazia; nenhum dado de exemplo ou placeholder
 - [ ] Confirmar o lote, rejeitar com motivo e resolver itens da Fila gravam no mesmo armazenamento usado pela leitura do Excel
 - [ ] Item decidido no Excel e na tela vira conflito, mesmo com decisões iguais, e nada é aplicado
 - [ ] Testes finos via HTTP: a tela grava pelo mesmo caminho e mostra os mesmos totais do workbook; a lógica de conflito é testada no ponto principal

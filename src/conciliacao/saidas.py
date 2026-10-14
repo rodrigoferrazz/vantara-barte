@@ -91,23 +91,31 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
 
 
 def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
+    for linha in linhas_do_resumo(resultado):
+        aba.append(linha)
+    aba.column_dimensions["A"].width = 32
+    aba.column_dimensions["B"].width = 60
+
+
+def linhas_do_resumo(resultado: Resultado) -> list[tuple[str, str | int]]:
     resumo = resultado.resumo
-    aba.append((LINHA_DA_EXECUCAO_NO_RESUMO, resumo.execucao))
-    aba.append(("Arquivos lidos", len(resumo.arquivos_lidos)))
+    linhas: list[tuple[str, str | int]] = []
+    linhas.append((LINHA_DA_EXECUCAO_NO_RESUMO, resumo.execucao))
+    linhas.append(("Arquivos lidos", len(resumo.arquivos_lidos)))
     for lido in resumo.arquivos_lidos:
-        aba.append((f"Lido: {lido}", ""))
-    aba.append(("Arquivos recusados", len(resumo.arquivos_recusados)))
+        linhas.append((f"Lido: {lido}", ""))
+    linhas.append(("Arquivos recusados", len(resumo.arquivos_recusados)))
     for recusado in resumo.arquivos_recusados:
-        aba.append((f"Recusado: {recusado.nome}", recusado.motivo))
-    aba.append(("Lançamentos novos no Extrato", resumo.lancamentos_novos))
+        linhas.append((f"Recusado: {recusado.nome}", recusado.motivo))
+    linhas.append(("Lançamentos novos no Extrato", resumo.lancamentos_novos))
     for destino, total in resumo.totais.items():
-        aba.append((destino.value, f"{total.quantidade} lançamento(s), {formatar_reais(total.valor_centavos)}"))
-    aba.append(("Resolvido sozinho", _resolvido_sozinho(resumo.parte_automatica)))
-    aba.append(("Alerta de queda da parte automática", _alerta_de_queda(resumo)))
-    aba.append(("Itens de Título na Fila", len(resultado.itens_de_titulo)))
+        linhas.append((destino.value, f"{total.quantidade} lançamento(s), {formatar_reais(total.valor_centavos)}"))
+    linhas.append(("Resolvido sozinho", _resolvido_sozinho(resumo.parte_automatica)))
+    linhas.append(("Alerta de queda da parte automática", _alerta_de_queda(resumo)))
+    linhas.append(("Itens de Título na Fila", len(resultado.itens_de_titulo)))
     referencia = resumo.data_de_referencia
-    aba.append(("Data de referência", f"{referencia.data:%d/%m/%Y}" if referencia.data else _SEM_DATA_DE_REFERENCIA))
-    aba.append(
+    linhas.append(("Data de referência", f"{referencia.data:%d/%m/%Y}" if referencia.data else _SEM_DATA_DE_REFERENCIA))
+    linhas.append(
         (
             "Conta que segura a Data de referência",
             "; ".join(
@@ -118,11 +126,11 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
             ),
         )
     )
-    aba.append(("Lista de cobrança", _total_da_cobranca(resultado.lista_de_cobranca)))
-    aba.append(("Títulos em análise", _total_da_cobranca(resultado.em_analise)))
-    aba.append(("IA (parecer de nome)", _situacao_da_ia(resumo)))
+    linhas.append(("Lista de cobrança", total_da_cobranca(resultado.lista_de_cobranca)))
+    linhas.append(("Títulos em análise", total_da_cobranca(resultado.em_analise)))
+    linhas.append(("IA (parecer de nome)", _situacao_da_ia(resumo)))
     decisoes = resumo.decisoes
-    aba.append(
+    linhas.append(
         (
             "Decisões lidas do Excel",
             f"{decisoes.confirmadas} confirmada(s), {decisoes.rejeitadas} rejeitada(s), "
@@ -130,8 +138,8 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
             + f"{len(decisoes.nao_aplicadas)} não aplicada(s)",
         )
     )
-    aba.append(("Conflitos entre Excel e tela", len(decisoes.conflitos)))
-    aba.append(
+    linhas.append(("Conflitos entre Excel e tela", len(decisoes.conflitos)))
+    linhas.append(
         (
             "Fila resolvida pelo Excel",
             f"{decisoes.classificadas} Crédito(s) sem título classificado(s), "
@@ -139,22 +147,21 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
             f"{decisoes.duplicidades} Possível(is) duplicidade(s) decidida(s)",
         )
     )
-    aba.append(
+    linhas.append(
         (
             "Conciliado fora (na causa raiz)",
             f"{len(resultado.conciliados_fora)} Crédito(s), "
             f"{formatar_reais(sum(item.lancamento.valor_centavos for item in resultado.conciliados_fora))}",
         )
     )
-    aba.append(("Títulos a cancelar na origem", len(resultado.cancelar_na_origem)))
+    linhas.append(("Títulos a cancelar na origem", len(resultado.cancelar_na_origem)))
     for situacao, rotulo in _ROTULOS_DO_ACOMPANHAMENTO.items():
-        aba.append((rotulo, sum(1 for t in resultado.acompanhamento_do_erp if t.situacao is situacao)))
+        linhas.append((rotulo, sum(1 for t in resultado.acompanhamento_do_erp if t.situacao is situacao)))
     for aviso in decisoes.nao_aplicadas:
-        aba.append(("Decisão não aplicada", aviso))
+        linhas.append(("Decisão não aplicada", aviso))
     for conflito in decisoes.conflitos:
-        aba.append(("Conflito", conflito))
-    aba.column_dimensions["A"].width = 32
-    aba.column_dimensions["B"].width = 60
+        linhas.append(("Conflito", conflito))
+    return linhas
 
 
 _ROTULOS_DO_ACOMPANHAMENTO = {
@@ -194,7 +201,7 @@ def _alerta_de_queda(resumo: Resumo) -> str:
     )
 
 
-def _total_da_cobranca(titulos: tuple[TituloNaCobranca, ...]) -> str:
+def total_da_cobranca(titulos: tuple[TituloNaCobranca, ...]) -> str:
     return f"{len(titulos)} Título(s), {formatar_reais(sum(t.saldo_centavos for t in titulos))}"
 
 
@@ -214,8 +221,8 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
     for item in itens:
         lancamento = item.lancamento
         valores_do_destino = {
-            "Títulos": _titulos(item.titulos),
-            "Títulos sugeridos": _titulos(item.titulos),
+            "Títulos": descrever_titulos(item.titulos),
+            "Títulos sugeridos": descrever_titulos(item.titulos),
             "Motivo": item.motivo.value if item.motivo else "",
             "Evidência": "; ".join(tipo.value for tipo in item.evidencia),
             "O que falta": item.o_que_falta,
@@ -300,7 +307,7 @@ def _aba_de_cancelar_na_origem(aba: Worksheet, titulos: tuple[TituloACancelar, .
                 titulo.cnpj,
                 titulo.vencimento,
                 Decimal(titulo.valor_centavos) / 100,
-                _titulos((cancelar.oficial,)),
+                descrever_titulos((cancelar.oficial,)),
                 cancelar.item,
             )
         )
@@ -354,7 +361,7 @@ def _acrescentar_itens_de_titulo(aba: Worksheet, itens: tuple[ItemDeTitulo, ...]
                 item.identificador,
                 *sem_lancamento,
                 item.motivo.value,
-                _titulos(item.titulos),
+                descrever_titulos(item.titulos),
                 None,
                 item.motivo.o_que_falta,
                 item.explicacao,
@@ -483,5 +490,5 @@ def _aba_de_arquivos_recusados(aba: Worksheet, recusados: tuple[ArquivoRecusado,
     aba.freeze_panes = "A2"
 
 
-def _titulos(titulos: tuple[Titulo, ...]) -> str:
+def descrever_titulos(titulos: tuple[Titulo, ...]) -> str:
     return "; ".join(f"{titulo.documento} ({titulo.sistema_de_origem})" for titulo in titulos)
