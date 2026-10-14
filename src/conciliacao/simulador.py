@@ -1,6 +1,6 @@
 import random
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, timedelta
 from enum import StrEnum
@@ -9,7 +9,15 @@ from fnmatch import fnmatch
 from conciliacao.adaptadores import EXTRATOS
 from conciliacao.calendario import eh_dia_util, vencimento_efetivo
 from conciliacao.configuracao import Configuracao, ContaDeExtrato
-from conciliacao.dominio import Canal, Destino, MotivoDeNaoIdentificacao, Natureza, TipoDeIdentificador, Titulo
+from conciliacao.dominio import (
+    Canal,
+    Destino,
+    Lancamento,
+    MotivoDeNaoIdentificacao,
+    Natureza,
+    TipoDeIdentificador,
+    Titulo,
+)
 from conciliacao.encargo import enquadrar, multa_e_juros
 from conciliacao.gerador import (
     DEPOSITOS,
@@ -116,11 +124,12 @@ class PlanoDePagamentos:
     def ultimo_dia(self) -> date:
         return max(esperado.data for esperado in self.gabarito)
 
-    def extrato(self, conta: str) -> str:
-        da_conta = sorted(
-            (e for e in self.gabarito if e.conta == conta), key=lambda e: (e.data, e.historico, e.valor_centavos)
-        )
-        return extrato_itau((e.data, e.historico, e.documento, e.valor_centavos, Natureza.CREDITO) for e in da_conta)
+    def extrato(self, conta: str, mantidos: Iterable[Lancamento] = ()) -> str:
+        linhas = [
+            *((e.data, e.historico, e.documento, e.valor_centavos, Natureza.CREDITO) for e in self.gabarito if e.conta == conta),
+            *((m.data, m.historico, m.documento, m.valor_centavos, m.natureza) for m in mantidos if m.conta == conta),
+        ]
+        return extrato_itau(sorted(linhas, key=lambda linha: (linha[0], linha[1], linha[3])))
 
 
 def plano_por_proporcoes(
@@ -130,7 +139,9 @@ def plano_por_proporcoes(
     simulador: ConfiguracaoDoSimulador,
 ) -> PlanoDePagamentos:
     _validar(simulador.proporcoes)
-    return _PorProporcoes(configuracao, simulador, list(titulos)).planejar(cobrancas)
+    return _PorProporcoes(
+        configuracao=configuracao, titulos=list(titulos), inicio=simulador.inicio, simulador=simulador
+    ).planejar(cobrancas)
 
 
 def _validar(proporcoes: ProporcoesDoSimulador) -> None:
@@ -147,17 +158,12 @@ type _Chave = tuple[str, date, int]
 
 
 @dataclass
-class _PorProporcoes:
+class _Simulador:
     configuracao: Configuracao
-    simulador: ConfiguracaoDoSimulador
     titulos: list[Titulo]
-    rng: random.Random = field(init=False)
-    pagamentos: list[PagamentoSimulado] = field(default_factory=list)
-    chaves: set[_Chave] = field(default_factory=set)
-    nomes_de_ia: set[str] = field(default_factory=set)
+    inicio: date
 
     def __post_init__(self) -> None:
-        self.rng = random.Random(self.simulador.semente)
         self.por_chave = {(t.sistema_de_origem, t.documento): t for t in self.titulos}
         valores: dict[str, list[int]] = defaultdict(list)
         nomes: dict[str, set[str]] = defaultdict(set)
@@ -172,6 +178,98 @@ class _PorProporcoes:
         self.contas_do_extrato = list(
             dict.fromkeys(c.conta for c in self.configuracao.contas if c.banco in bancos_com_extrato)
         )
+
+    def _aceita(self, tipo: TipoDeIdentificador, cobranca: CobrancaIdentificada, data: date, valor: int) -> bool:
+        com_encargo = self._valor_com_encargo(cobranca, data)
+        return valor == com_encargo if tipo is TipoDeIdentificador.TXID else valor <= com_encargo
+
+    def _valor_com_encargo(self, cobranca: CobrancaIdentificada, data: date) -> int:
+        return cobranca.valor_centavos + sum(self._multa_e_juros(cobranca, data))
+
+    def _multa_e_juros(self, cobranca: CobrancaIdentificada, data: date) -> tuple[int, int]:
+        return multa_e_juros(cobranca.valor_centavos, cobranca.vencimento, data, self.configuracao.encargo)
+
+    def _pagamento_identificado(
+        self,
+        titulo: Titulo,
+        cobranca: CobrancaIdentificada,
+        tipo: TipoDeIdentificador,
+        conta: ContaDeExtrato,
+        desfecho: Desfecho,
+        data: date,
+        valor: int,
+    ) -> PagamentoSimulado:
+        multa, juros = self._multa_e_juros(cobranca, data)
+        if valor != cobranca.valor_centavos + multa + juros:
+            multa, juros = max(valor - cobranca.valor_centavos, 0), 0
+        nome = self._nome_principal(titulo.franqueado)
+        historico = (f"PIX RECEBIDO {truncar_como_o_banco(nome)}", "") if tipo is TipoDeIdentificador.TXID else (LIQUIDACAO, "")
+        fecha = enquadrar(replace(titulo, valor_centavos=cobranca.valor_centavos), valor, data, self.configuracao.encargo).fecha
+        esperado = CreditoEsperado(
+            conta=conta.conta,
+            data=data,
+            historico=historico[0],
+            documento=historico[1],
+            valor_centavos=valor,
+            desfecho=desfecho,
+            canal=Canal.PIX if tipo is TipoDeIdentificador.TXID else Canal.BOLETO,
+            identificador=tipo,
+            destino=Destino.LISTA_DE_BAIXA if fecha else Destino.FILA_DE_EXCECOES,
+            titulos=frozenset({(titulo.sistema_de_origem, titulo.documento)}),
+            motivo=None if fecha else MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
+            pagador=titulo.franqueado,
+        )
+        de_cobranca = PagamentoDeCobranca(
+            cobranca=cobranca,
+            tipo=tipo,
+            banco=conta.banco,
+            data=data,
+            valor_centavos=valor,
+            multa_centavos=multa,
+            juros_centavos=juros,
+            documento_do_pagador=cobranca.cnpj,
+            nome_do_pagador=como_o_banco_escreve(nome),
+        )
+        return PagamentoSimulado(esperado, de_cobranca)
+
+    def _nome_principal(self, raiz: str) -> str:
+        return self.nomes[raiz][0]
+
+    def _conta_do_identificador(self, tipo: TipoDeIdentificador) -> ContaDeExtrato:
+        inicio = self.inicio
+        if tipo is TipoDeIdentificador.TXID:
+            return self._conta_do_arquivo(arquivo_de_pix_recebidos(inicio, inicio))
+        migracao = self.configuracao.migracao
+        faixa = migracao.boleto if migracao is not None else None
+        if faixa is None:
+            raise ConfiguracaoDoSimuladorInvalida("cobrança com nosso número sem [migracao.boleto] na configuração")
+        conta = self._conta_do_arquivo(arquivo_de_retorno_cnab(faixa.banco, inicio, inicio))
+        if (conta.banco, conta.conta) != (faixa.banco, faixa.conta):
+            raise ConfiguracaoDoSimuladorInvalida(
+                f"o retorno CNAB casa com a conta {conta.conta}, mas a faixa de nosso número é da conta {faixa.conta}"
+            )
+        return conta
+
+    def _conta_do_arquivo(self, nome: str) -> ContaDeExtrato:
+        contas = [conta for conta in self.configuracao.contas if fnmatch(nome, conta.padrao)]
+        if len(contas) != 1:
+            raise ConfiguracaoDoSimuladorInvalida(f"o arquivo {nome} da porta precisa casar com uma única [[contas]]")
+        if contas[0].conta not in self.contas_do_extrato:
+            raise ConfiguracaoDoSimuladorInvalida(f"a conta {contas[0].conta} do arquivo {nome} não tem Extrato")
+        return contas[0]
+
+
+@dataclass
+class _PorProporcoes(_Simulador):
+    simulador: ConfiguracaoDoSimulador
+    rng: random.Random = field(init=False)
+    pagamentos: list[PagamentoSimulado] = field(default_factory=list)
+    chaves: set[_Chave] = field(default_factory=set)
+    nomes_de_ia: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.rng = random.Random(self.simulador.semente)
 
     def planejar(self, cobrancas: Iterable[CobrancaIdentificada]) -> PlanoDePagamentos:
         por_titulo: dict[tuple[str, str], list[CobrancaIdentificada]] = defaultdict(list)
@@ -231,59 +329,6 @@ class _PorProporcoes:
             self._registrar(self._pagamento_identificado(titulo, cobranca, tipo, conta, desfecho, data, valor))
             return
         raise ConfiguracaoDoSimuladorInvalida(f"sem dia livre para o pagamento do Título {titulo.documento}")
-
-    def _aceita(self, tipo: TipoDeIdentificador, cobranca: CobrancaIdentificada, data: date, valor: int) -> bool:
-        com_encargo = self._valor_com_encargo(cobranca, data)
-        return valor == com_encargo if tipo is TipoDeIdentificador.TXID else valor <= com_encargo
-
-    def _valor_com_encargo(self, cobranca: CobrancaIdentificada, data: date) -> int:
-        return cobranca.valor_centavos + sum(self._multa_e_juros(cobranca, data))
-
-    def _multa_e_juros(self, cobranca: CobrancaIdentificada, data: date) -> tuple[int, int]:
-        return multa_e_juros(cobranca.valor_centavos, cobranca.vencimento, data, self.configuracao.encargo)
-
-    def _pagamento_identificado(
-        self,
-        titulo: Titulo,
-        cobranca: CobrancaIdentificada,
-        tipo: TipoDeIdentificador,
-        conta: ContaDeExtrato,
-        desfecho: Desfecho,
-        data: date,
-        valor: int,
-    ) -> PagamentoSimulado:
-        multa, juros = self._multa_e_juros(cobranca, data)
-        if valor != cobranca.valor_centavos + multa + juros:
-            multa, juros = 0, 0
-        nome = self._nome_principal(titulo.franqueado)
-        historico = (f"PIX RECEBIDO {truncar_como_o_banco(nome)}", "") if tipo is TipoDeIdentificador.TXID else (LIQUIDACAO, "")
-        fecha = enquadrar(replace(titulo, valor_centavos=cobranca.valor_centavos), valor, data, self.configuracao.encargo).fecha
-        esperado = CreditoEsperado(
-            conta=conta.conta,
-            data=data,
-            historico=historico[0],
-            documento=historico[1],
-            valor_centavos=valor,
-            desfecho=desfecho,
-            canal=Canal.PIX if tipo is TipoDeIdentificador.TXID else Canal.BOLETO,
-            identificador=tipo,
-            destino=Destino.LISTA_DE_BAIXA if fecha else Destino.FILA_DE_EXCECOES,
-            titulos=frozenset({(titulo.sistema_de_origem, titulo.documento)}),
-            motivo=None if fecha else MotivoDeNaoIdentificacao.VALOR_NAO_FECHA,
-            pagador=titulo.franqueado,
-        )
-        de_cobranca = PagamentoDeCobranca(
-            cobranca=cobranca,
-            tipo=tipo,
-            banco=conta.banco,
-            data=data,
-            valor_centavos=valor,
-            multa_centavos=multa,
-            juros_centavos=juros,
-            documento_do_pagador=cobranca.cnpj,
-            nome_do_pagador=como_o_banco_escreve(nome),
-        )
-        return PagamentoSimulado(esperado, de_cobranca)
 
     def _solto(self, titulo: Titulo, cobranca: CobrancaIdentificada, desfecho: Desfecho, dias: list[date], valor: int) -> None:
         if desfecho is Desfecho.CREDITO_SOLTO:
@@ -375,9 +420,6 @@ class _PorProporcoes:
             return MotivoDeNaoIdentificacao.VALOR_NAO_FECHA
         return MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO
 
-    def _nome_principal(self, raiz: str) -> str:
-        return self.nomes[raiz][0]
-
     def _franqueados_do_prefixo(self, nome: str) -> list[str]:
         normalizado = nome_normalizado(nome)
         return sorted({raiz for do_franqueado, raiz in self.nomes_normalizados if do_franqueado.startswith(normalizado)})
@@ -389,29 +431,6 @@ class _PorProporcoes:
 
     def _em_ordem(self, dias: list[date]) -> list[date]:
         return self.rng.sample(dias, len(dias))
-
-    def _conta_do_identificador(self, tipo: TipoDeIdentificador) -> ContaDeExtrato:
-        inicio = self.simulador.inicio
-        if tipo is TipoDeIdentificador.TXID:
-            return self._conta_do_arquivo(arquivo_de_pix_recebidos(inicio, inicio))
-        migracao = self.configuracao.migracao
-        faixa = migracao.boleto if migracao is not None else None
-        if faixa is None:
-            raise ConfiguracaoDoSimuladorInvalida("cobrança com nosso número sem [migracao.boleto] na configuração")
-        conta = self._conta_do_arquivo(arquivo_de_retorno_cnab(faixa.banco, inicio, inicio))
-        if (conta.banco, conta.conta) != (faixa.banco, faixa.conta):
-            raise ConfiguracaoDoSimuladorInvalida(
-                f"o retorno CNAB casa com a conta {conta.conta}, mas a faixa de nosso número é da conta {faixa.conta}"
-            )
-        return conta
-
-    def _conta_do_arquivo(self, nome: str) -> ContaDeExtrato:
-        contas = [conta for conta in self.configuracao.contas if fnmatch(nome, conta.padrao)]
-        if len(contas) != 1:
-            raise ConfiguracaoDoSimuladorInvalida(f"o arquivo {nome} da porta precisa casar com uma única [[contas]]")
-        if contas[0].conta not in self.contas_do_extrato:
-            raise ConfiguracaoDoSimuladorInvalida(f"a conta {contas[0].conta} do arquivo {nome} não tem Extrato")
-        return contas[0]
 
     def _dias_em_dia(self, cobranca: CobrancaIdentificada) -> list[date]:
         efetivo = vencimento_efetivo(cobranca.vencimento)
@@ -426,6 +445,63 @@ class _PorProporcoes:
         efetivo = vencimento_efetivo(cobranca.vencimento)
         inicio = max(self.simulador.inicio, efetivo + timedelta(days=1))
         return _dias_uteis(inicio, efetivo + timedelta(days=_DIAS_DE_ATRASO))
+
+
+@dataclass
+class Contrafactual(_Simulador):
+    def pagamentos(
+        self, lancamento: Lancamento, cobrancas: Sequence[CobrancaIdentificada]
+    ) -> tuple[PagamentoSimulado, ...] | None:
+        partes = self._partes(lancamento, cobrancas)
+        if partes is None:
+            return None
+        pagamentos = []
+        for cobranca, valor in partes:
+            tipo = next(
+                (
+                    tipo
+                    for tipo in TipoDeIdentificador
+                    if cobranca.identificador(tipo) is not None and self._aceita(tipo, cobranca, lancamento.data, valor)
+                ),
+                None,
+            )
+            if tipo is None:
+                return None
+            pagamentos.append(
+                self._pagamento_identificado(
+                    self.por_chave[(cobranca.sistema_de_origem, cobranca.documento)],
+                    cobranca,
+                    tipo,
+                    self._conta_do_identificador(tipo),
+                    _desfecho(cobranca, lancamento.data, valor),
+                    lancamento.data,
+                    valor,
+                )
+            )
+        return tuple(pagamentos)
+
+    def _partes(
+        self, lancamento: Lancamento, cobrancas: Sequence[CobrancaIdentificada]
+    ) -> list[tuple[CobrancaIdentificada, int]] | None:
+        if len(cobrancas) == 1:
+            return [(cobrancas[0], lancamento.valor_centavos)]
+        for valores in (
+            [cobranca.valor_centavos for cobranca in cobrancas],
+            [self._valor_com_encargo(cobranca, lancamento.data) for cobranca in cobrancas],
+        ):
+            if sum(valores) == lancamento.valor_centavos:
+                return list(zip(cobrancas, valores))
+        return None
+
+
+def _desfecho(cobranca: CobrancaIdentificada, data: date, valor: int) -> Desfecho:
+    if valor < cobranca.valor_centavos:
+        return Desfecho.PARCIAL
+    if data <= vencimento_efetivo(cobranca.vencimento):
+        return Desfecho.EM_DIA
+    if valor == cobranca.valor_centavos:
+        return Desfecho.ATRASO_SEM_ENCARGO
+    return Desfecho.ATRASO_COM_MULTA
 
 
 def _dias_uteis(inicio: date, fim: date) -> list[date]:

@@ -1,7 +1,7 @@
 import argparse
 import sys
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date
 from itertools import count
@@ -10,7 +10,12 @@ from pathlib import Path
 from conciliacao.acompanhamento import chave_do_titulo, saldos
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.calendario import vencimento_efetivo
-from conciliacao.configuracao import Configuracao, ConfiguracaoInvalida, carregar_configuracao
+from conciliacao.configuracao import (
+    Configuracao,
+    ConfiguracaoDeMigracao,
+    ConfiguracaoInvalida,
+    carregar_configuracao,
+)
 from conciliacao.dominio import OrigemDoIdentificador, TipoDeIdentificador, Titulo, VinculoDeCobranca
 from conciliacao.execucao import calcular_data_de_referencia, possiveis_duplicidades_nao_decididas
 from conciliacao.identificadores import FaixaDeNossoNumeroEsgotada, gerar_txid, nossos_numeros_livres
@@ -29,6 +34,17 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
     referencia = calcular_data_de_referencia(armazenamento, configuracao).data
     if migracao is None or referencia is None:
         return Emissao(referencia, ())
+    elegiveis = [
+        titulo
+        for titulo in titulos_em_aberto_fora_de_duplicidade(armazenamento)
+        if titulo.franqueado in migracao.franqueados and vencimento_efetivo(titulo.vencimento) >= referencia
+    ]
+    return Emissao(referencia, emitir(elegiveis, armazenamento, migracao, porta))
+
+
+def emitir(
+    titulos: Iterable[Titulo], armazenamento: Armazenamento, migracao: ConfiguracaoDeMigracao, porta: PortaDeCobranca
+) -> tuple[CobrancaIdentificada, ...]:
     with armazenamento.transacao():
         existentes = armazenamento.vinculos_de_cobranca()
         vinculos = {(v.tipo, v.sistema_de_origem, v.documento): v for v in existentes}
@@ -42,9 +58,7 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
             usados = {v.identificador for v in existentes if v.tipo is TipoDeIdentificador.NOSSO_NUMERO}
             geradores[TipoDeIdentificador.NOSSO_NUMERO] = nossos_numeros_livres(migracao.boleto, usados)
         a_enviar: dict[tuple[str, str, int, date], list[VinculoDeCobranca]] = defaultdict(list)
-        for titulo in _titulos_em_aberto_fora_de_duplicidade(armazenamento):
-            if titulo.franqueado not in migracao.franqueados or vencimento_efetivo(titulo.vencimento) < referencia:
-                continue
+        for titulo in titulos:
             for tipo, gerador in geradores.items():
                 if tipo is TipoDeIdentificador.NOSSO_NUMERO and titulo.nosso_numero is not None:
                     continue
@@ -72,10 +86,10 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
             for vinculo in do_titulo:
                 armazenamento.registrar_envio(vinculo)
         emitidas.append(cobranca)
-    return Emissao(referencia, tuple(emitidas))
+    return tuple(emitidas)
 
 
-def _titulos_em_aberto_fora_de_duplicidade(armazenamento: Armazenamento) -> list[Titulo]:
+def titulos_em_aberto_fora_de_duplicidade(armazenamento: Armazenamento) -> list[Titulo]:
     cancelados = armazenamento.titulos_cancelados_na_origem()
     na_exportacao = [t for t in armazenamento.ultima_fotografia() if chave_do_titulo(t) not in cancelados]
     em_duplicidade = chaves_em_duplicidade(possiveis_duplicidades_nao_decididas(armazenamento, na_exportacao))

@@ -56,8 +56,10 @@ limite_de_queda_pontos_percentuais = 10
 # conta = "conta-principal-cobranca"
 
 # Análise de impacto (comando analisar-impacto). O Ranking de migração é dividido em Ondas de migração deste tamanho,
-# em Franqueados. A semente fixa os sorteios da análise, para que a mesma pasta e a mesma configuração deem sempre o
-# mesmo relatório. Os dois valores aparecem na aba Premissas.
+# em Franqueados. O "depois" é mostrado para cada Adesão da faixa (% dos Créditos que chegariam identificados). A
+# semente fixa o sorteio de cada Crédito, para que a mesma pasta e a mesma configuração deem sempre o mesmo relatório.
+# Os valores aparecem na aba Premissas.
 [analise_de_impacto]
 semente = 1
 tamanho_da_onda = 10
+faixa_de_adesao_percentual = [50, 80, 95]

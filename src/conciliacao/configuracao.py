@@ -43,6 +43,7 @@ class ConfiguracaoDeMigracao:
 class ConfiguracaoDaAnaliseDeImpacto:
     semente: int = 1
     tamanho_da_onda: int = 10
+    faixa_de_adesao: tuple[Decimal, ...] = (Decimal("50"), Decimal("80"), Decimal("95"))
 
 
 @dataclass(frozen=True)
@@ -80,10 +81,11 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
 def _analise_de_impacto(caminho: Path, analise: object) -> ConfiguracaoDaAnaliseDeImpacto:
     if not isinstance(analise, dict):
         raise ConfiguracaoInvalida(f"{caminho}: [analise_de_impacto] precisa ser uma seção")
-    desconhecidos = sorted(set(analise) - {"semente", "tamanho_da_onda"})
+    campos = ("semente", "tamanho_da_onda", "faixa_de_adesao_percentual")
+    desconhecidos = sorted(set(analise) - set(campos))
     if desconhecidos:
         raise ConfiguracaoInvalida(
-            f"{caminho}: [analise_de_impacto] não conhece {', '.join(desconhecidos)}; use semente e tamanho_da_onda"
+            f"{caminho}: [analise_de_impacto] não conhece {', '.join(desconhecidos)}; use {', '.join(campos)}"
         )
     padrao = ConfiguracaoDaAnaliseDeImpacto()
     semente = analise.get("semente", padrao.semente)
@@ -96,7 +98,27 @@ def _analise_de_impacto(caminho: Path, analise: object) -> ConfiguracaoDaAnalise
         raise ConfiguracaoInvalida(
             f"{caminho}: [analise_de_impacto] tamanho_da_onda precisa ser um número inteiro de Franqueados maior que zero"
         )
-    return ConfiguracaoDaAnaliseDeImpacto(semente=semente, tamanho_da_onda=tamanho_da_onda)
+    faixa = analise.get("faixa_de_adesao_percentual")
+    return ConfiguracaoDaAnaliseDeImpacto(
+        semente=semente,
+        tamanho_da_onda=tamanho_da_onda,
+        faixa_de_adesao=padrao.faixa_de_adesao if faixa is None else _faixa_de_adesao(caminho, faixa),
+    )
+
+
+def _faixa_de_adesao(caminho: Path, faixa: object) -> tuple[Decimal, ...]:
+    if (
+        not isinstance(faixa, list)
+        or not faixa
+        or not all(not isinstance(a, bool) and isinstance(a, int | float) and 0 <= a <= 100 for a in faixa)
+    ):
+        raise ConfiguracaoInvalida(
+            f"{caminho}: [analise_de_impacto] faixa_de_adesao_percentual precisa ser uma lista de números de 0 a 100"
+        )
+    adesoes = sorted(Decimal(str(adesao)) for adesao in faixa)
+    if len(set(adesoes)) != len(adesoes):
+        raise ConfiguracaoInvalida(f"{caminho}: [analise_de_impacto] faixa_de_adesao_percentual repete uma Adesão")
+    return tuple(adesoes)
 
 
 _RAIZ_DO_CNPJ = re.compile(r"\d{8}")
