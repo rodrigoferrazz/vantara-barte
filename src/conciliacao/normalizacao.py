@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from datetime import date, datetime
+from decimal import Decimal
 from fractions import Fraction
 from zoneinfo import ZoneInfo
 
@@ -83,6 +84,10 @@ def formatar_reais(centavos: int) -> str:
 
 def formatar_percentual(percentual: Fraction, simbolo: bool = True) -> str:
     return f"{float(percentual):.1f}".replace(".", ",") + ("%" if simbolo else "")
+
+
+def formatar_adesao(adesao: Decimal) -> str:
+    return f"{adesao:f}".replace(".", ",") + "%"
 
 
 def cnpj(texto: str) -> str:

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping
@@ -6,8 +7,17 @@ from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from conciliacao.dominio import (
+    FranqueadoNoRanking,
+    GrupoDaCausaRaiz,
+    NumerosDoCenario,
+    OndaNoRelatorio,
+    PorQueFicaSolto,
+    RankingDeMigracao,
+    RelatorioDeImpacto,
+    ValorDaPremissa,
     ArquivoRecusado,
     ChaveDoIdentificador,
     OrigemDoIdentificador,
@@ -307,6 +317,14 @@ CREATE TABLE IF NOT EXISTS retornos_sem_credito (
     creditos_do_par INTEGER NOT NULL,
     retornos_do_par INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS analises_de_impacto (
+    id INTEGER PRIMARY KEY,
+    momento TEXT NOT NULL,
+    pasta_base TEXT NOT NULL,
+    semente INTEGER NOT NULL,
+    premissas TEXT NOT NULL,
+    numeros TEXT NOT NULL
+);
 """
 
 _SEM_REVERSAO = "d.id NOT IN (SELECT confirmacao_id FROM reversoes)"
@@ -473,6 +491,50 @@ class Armazenamento:
             )
             for identificador, execucao, aba, item, decisao, motivo, titulos, franqueado, referencia, autor, momento in linhas
         ]
+
+    def registrar_analise_de_impacto(self, relatorio: RelatorioDeImpacto) -> None:
+        numeros = {
+            "antes": _numeros_para_json(relatorio.antes),
+            "todos_migrados": [_numeros_para_json(cenario) for cenario in relatorio.todos_migrados],
+            "ondas": [
+                {"onda": onda.onda, "cenarios": [_numeros_para_json(cenario) for cenario in onda.cenarios]}
+                for onda in relatorio.ondas
+            ],
+            "ranking": _ranking_para_json(relatorio.ranking),
+        }
+        premissas = [[nome, _premissa_para_json(valor)] for nome, valor in relatorio.premissas]
+        self._conexao.execute(
+            "INSERT INTO analises_de_impacto (momento, pasta_base, semente, premissas, numeros) VALUES (?, ?, ?, ?, ?)",
+            (
+                relatorio.momento.isoformat(),
+                relatorio.pasta_base,
+                relatorio.semente,
+                json.dumps(premissas, ensure_ascii=False),
+                json.dumps(numeros, ensure_ascii=False),
+            ),
+        )
+
+    def ultima_analise_de_impacto(self) -> RelatorioDeImpacto | None:
+        linha = self._conexao.execute(
+            "SELECT momento, pasta_base, semente, premissas, numeros FROM analises_de_impacto ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if linha is None:
+            return None
+        momento, pasta_base, semente, premissas, numeros = linha
+        dados = json.loads(numeros)
+        return RelatorioDeImpacto(
+            momento=datetime.fromisoformat(momento),
+            pasta_base=pasta_base,
+            semente=semente,
+            antes=_numeros_de_json(dados["antes"]),
+            todos_migrados=tuple(_numeros_de_json(cenario) for cenario in dados["todos_migrados"]),
+            ondas=tuple(
+                OndaNoRelatorio(onda["onda"], tuple(_numeros_de_json(cenario) for cenario in onda["cenarios"]))
+                for onda in dados["ondas"]
+            ),
+            ranking=_ranking_de_json(dados["ranking"]),
+            premissas=tuple((nome, _premissa_de_json(valor)) for nome, valor in json.loads(premissas)),
+        )
 
     def ultima_execucao(self) -> int | None:
         (execucao,) = self._conexao.execute("SELECT MAX(id) FROM execucoes").fetchone()
@@ -1452,6 +1514,76 @@ def _retorno(linha: Iterable[object]) -> RetornoDeCobranca:
         documento_do_pagador=None if documento_do_pagador is None else str(documento_do_pagador),
         nome_do_pagador=None if nome_do_pagador is None else str(nome_do_pagador),
     )
+
+
+def _total_para_json(total: TotalDoDestino) -> list[int]:
+    return [total.quantidade, total.valor_centavos]
+
+
+def _total_de_json(total: list[int]) -> TotalDoDestino:
+    quantidade, valor_centavos = total
+    return TotalDoDestino(quantidade, valor_centavos)
+
+
+def _numeros_para_json(numeros: NumerosDoCenario) -> dict[str, object]:
+    return {
+        "adesao": None if numeros.adesao is None else str(numeros.adesao),
+        "franqueados_migrados": numeros.franqueados_migrados,
+        "identificados": _total_para_json(numeros.identificados),
+        "soltos": _total_para_json(numeros.soltos),
+        "lista_de_baixa": _total_para_json(numeros.lista_de_baixa),
+        "fila_de_excecoes": _total_para_json(numeros.fila_de_excecoes),
+        "fila_por_motivo": {motivo.value: _total_para_json(t) for motivo, t in numeros.fila_por_motivo.items()},
+        "soltos_por_razao": {razao.value: _total_para_json(t) for razao, t in numeros.soltos_por_razao.items()},
+    }
+
+
+def _numeros_de_json(dados: dict[str, Any]) -> NumerosDoCenario:
+    return NumerosDoCenario(
+        adesao=None if dados["adesao"] is None else Decimal(dados["adesao"]),
+        franqueados_migrados=dados["franqueados_migrados"],
+        identificados=_total_de_json(dados["identificados"]),
+        soltos=_total_de_json(dados["soltos"]),
+        lista_de_baixa=_total_de_json(dados["lista_de_baixa"]),
+        fila_de_excecoes=_total_de_json(dados["fila_de_excecoes"]),
+        fila_por_motivo={
+            MotivoDeNaoIdentificacao(motivo): _total_de_json(t) for motivo, t in dados["fila_por_motivo"].items()
+        },
+        soltos_por_razao={PorQueFicaSolto(razao): _total_de_json(t) for razao, t in dados["soltos_por_razao"].items()},
+    )
+
+
+def _ranking_para_json(ranking: RankingDeMigracao) -> dict[str, object]:
+    return {
+        "tamanho_da_onda": ranking.tamanho_da_onda,
+        "franqueados": [
+            [f.raiz, f.nome, f.quantidade, f.valor_centavos, f.posicao, f.onda] for f in ranking.franqueados
+        ],
+        "sem_franqueado": [
+            ranking.sem_franqueado.nome,
+            ranking.sem_franqueado.quantidade,
+            ranking.sem_franqueado.valor_centavos,
+        ],
+    }
+
+
+def _ranking_de_json(dados: dict[str, Any]) -> RankingDeMigracao:
+    return RankingDeMigracao(
+        franqueados=tuple(FranqueadoNoRanking(*franqueado) for franqueado in dados["franqueados"]),
+        sem_franqueado=GrupoDaCausaRaiz(*dados["sem_franqueado"]),
+        tamanho_da_onda=dados["tamanho_da_onda"],
+    )
+
+
+def _premissa_para_json(valor: ValorDaPremissa) -> object:
+    return {"decimal": str(valor)} if isinstance(valor, Decimal) else valor
+
+
+def _premissa_de_json(valor: Any) -> ValorDaPremissa:
+    if isinstance(valor, dict):
+        return Decimal(valor["decimal"])
+    assert isinstance(valor, int | str)
+    return valor
 
 
 _PREFIXO_DO_ITEM = "L"

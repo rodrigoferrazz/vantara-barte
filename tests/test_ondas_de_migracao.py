@@ -6,12 +6,11 @@ import pytest
 from openpyxl import load_workbook
 
 from conciliacao.configuracao import Configuracao, ConfiguracaoDaAnaliseDeImpacto
-from conciliacao.dominio import Destino, Item, Resultado, TipoDeEvidencia, TotalDoDestino
+from conciliacao.dominio import Destino, Item, PorQueFicaSolto, Resultado, TipoDeEvidencia, TotalDoDestino
 from conciliacao.gerador import ConfiguracaoDoGerador, gerar_dados_sinteticos
 from conciliacao.impacto import (
     AnaliseDeImpacto,
     CenarioDeAdesao,
-    PorQueFicaSolto,
     analisar_impacto,
     gerar_workbook_do_impacto,
 )

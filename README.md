@@ -23,24 +23,29 @@ Todos os comandos leem `conciliacao.toml` (opção `--configuracao`), que diz o 
 | Comando | O que faz |
 | --- | --- |
 | `uv run conciliar <pasta>` | Concilia as exportações e os Extratos da pasta e gera `conciliacao.xlsx`; o estado fica em `conciliacao.sqlite` |
-| `uv run conciliar-tela` | Abre a tela local com o resultado da última execução, onde a Analista decide os itens |
+| `uv run conciliar-tela` | Abre a tela local com o resultado da última execução, onde a Analista decide os itens, e a página de impacto com a última análise |
 | `uv run emitir-cobrancas` | Emite Cobrança identificada para os Títulos em aberto dos Franqueados migrados (precisa de `[migracao]`) |
-| `uv run analisar-impacto <pasta>` | Gera `analise_de_impacto.xlsx` com o antes e o depois da Cobrança identificada |
+| `uv run analisar-impacto <pasta>` | Gera `analise_de_impacto.xlsx` com o antes e o depois da Cobrança identificada e grava o resultado em `conciliacao.sqlite` para a tela |
 
 Exemplo com a amostra de julho:
 
 ```sh
 uv run conciliar data
 uv run analisar-impacto data
+uv run conciliar-tela
 ```
 
 ## Análise de impacto
 
-Concilia a pasta base como ela é (o "antes"), monta o Ranking de migração com os Créditos da Fila que um Identificador de cobrança resolveria e, para cada Adesão da faixa e cada Onda de migração acumulada, refaz a mesma conciliação com os pagamentos que chegariam identificados (o "depois"). O dinheiro é sempre o mesmo do antes: só muda se cada Crédito chega com identificador. Tudo roda em armazenamento temporário; nada é gravado na pasta base nem no `conciliacao.sqlite`.
+Concilia a pasta base como ela é (o "antes"), monta o Ranking de migração com os Créditos da Fila que um Identificador de cobrança resolveria e, para cada Adesão da faixa e cada Onda de migração acumulada, refaz a mesma conciliação com os pagamentos que chegariam identificados (o "depois"). O dinheiro é sempre o mesmo do antes: só muda se cada Crédito chega com identificador. Todas as conciliações rodam em armazenamento temporário e a pasta base não muda; da análise, só o resultado é gravado no `conciliacao.sqlite` (opção `--estado`), ao lado das execuções diárias, sem mexer nelas.
 
-Semente, tamanho da onda e faixa de Adesão ficam em `[analise_de_impacto]`. A verdade sobre qual Título cada Crédito paga vem, nesta ordem, do gabarito do gerador sintético (só pelos testes), das decisões confirmadas da Analista (opção `--estado` com um `conciliacao.sqlite`, que só é lido) ou das Propostas e sugestões do próprio antes. Na amostra de julho não há decisões confirmadas, então a verdade são as Propostas e sugestões, e a aba Premissas diz isso.
+Semente, tamanho da onda e faixa de Adesão ficam em `[analise_de_impacto]`. A verdade sobre qual Título cada Crédito paga vem, nesta ordem, do gabarito do gerador sintético (só pelos testes), das decisões confirmadas da Analista no mesmo `conciliacao.sqlite` (as decisões só são lidas) ou das Propostas e sugestões do próprio antes. Na amostra de julho não há decisões confirmadas, então a verdade são as Propostas e sugestões, e a aba Premissas diz isso.
 
 Cada combinação de onda e Adesão é uma conciliação inteira. Nos dados sintéticos de volume real (cerca de 1.900 Títulos em 4 contas), a configuração padrão (ondas de 10 Franqueados e Adesões de 50%, 80% e 95%) dá 14 ondas e 45 conciliações quando a IA reconhece os nomes do gabarito, e leva cerca de 2,5 minutos num MacBook Air M2 com a IA falsa. Com ondas de 50 Franqueados são 3 ondas e cerca de 40 segundos, que é o que o teste de aceitação roda.
+
+### Página de impacto
+
+A tela local (`uv run conciliar-tela`) tem, além da execução diária, a página "Análise de impacto" (`/impacto`), com a última análise gravada: o antes e o depois lado a lado para cada Adesão, o gráfico da Fila por Adesão, a queda da Fila a cada Onda de migração acumulada para cada Adesão, a Fila por Motivo, o Ranking de migração com a onda de cada Franqueado e as Premissas. A página só lê o que o comando gravou, com os mesmos números do workbook da mesma análise, e funciona sem internet; para atualizar, rode `analisar-impacto` de novo e recarregue a página.
 
 ## Testes
 

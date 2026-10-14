@@ -18,7 +18,7 @@ from conciliacao.decisoes import (
     registrar_decisao_da_tela,
 )
 from conciliacao.dominio import DecisaoDaTela, LinhaDeDecisao, Resultado
-from conciliacao.pagina import renderizar, renderizar_recusa
+from conciliacao.pagina import renderizar, renderizar_impacto, renderizar_recusa
 
 ENDERECO_LOCAL = "127.0.0.1"
 PORTA_PADRAO = 8765
@@ -64,6 +64,16 @@ def _pagina_inicial(estado: Path) -> Resposta:
     return Resposta(HTTPStatus.OK, renderizar(*_ultimo_estado(estado)))
 
 
+def _pagina_de_impacto(estado: Path) -> Resposta:
+    if not estado.exists():
+        return Resposta(HTTPStatus.OK, renderizar_impacto(None))
+    armazenamento = Armazenamento(estado)
+    try:
+        return Resposta(HTTPStatus.OK, renderizar_impacto(armazenamento.ultima_analise_de_impacto()))
+    finally:
+        armazenamento.fechar()
+
+
 def _decidir(estado: Path, envio: Envio) -> Resposta:
     campos = envio.campos
     linha = LinhaDeDecisao(
@@ -104,7 +114,7 @@ def _recusa(recusa: DecisaoDaTelaRecusada) -> Resposta:
     return Resposta(status, renderizar_recusa(str(recusa)))
 
 
-_ROTAS_GET: Mapping[str, Rota] = {"/": _pagina_inicial}
+_ROTAS_GET: Mapping[str, Rota] = {"/": _pagina_inicial, "/impacto": _pagina_de_impacto}
 _ROTAS_POST: Mapping[str, RotaDeEnvio] = {"/decidir": _decidir, "/confirmar-lote": _confirmar_o_lote}
 _NAO_ENCONTRADA = Resposta(HTTPStatus.NOT_FOUND, "Página não encontrada.", "text/plain; charset=utf-8")
 
@@ -143,7 +153,8 @@ def criar_servidor(estado: Path, porta: int = PORTA_PADRAO, analista: str | None
 
 def main(argumentos: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="conciliar-tela", description="Abre a tela local com o resultado da última execução."
+        prog="conciliar-tela",
+        description="Abre a tela local com o resultado da última execução e a última análise de impacto.",
     )
     parser.add_argument("--estado", type=Path, default=Path("conciliacao.sqlite"))
     parser.add_argument("--porta", type=int, default=PORTA_PADRAO)

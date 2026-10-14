@@ -5,7 +5,7 @@ import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from fnmatch import fnmatch
@@ -36,17 +36,22 @@ from conciliacao.dominio import (
     Lancamento,
     MotivoDeNaoIdentificacao,
     Natureza,
-    ParteAutomatica,
+    NumerosDoCenario,
+    OndaNoRelatorio,
+    PorQueFicaSolto,
     RankingDeMigracao,
+    RelatorioDeImpacto,
     Resultado,
     TipoDeDecisao,
     TipoDeEvidencia,
     Titulo,
     TotalDoDestino,
+    ValorDaPremissa,
 )
 from conciliacao.emissao import emitir, titulos_em_aberto_fora_de_duplicidade
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.gerador import LancamentoEsperado
+from conciliacao.normalizacao import formatar_adesao
 from conciliacao.parecerista import PareceristaDeNome, parecerista_da_configuracao
 from conciliacao.porta import CobrancaIdentificada, PortaSimulada
 from conciliacao.simulador import Contrafactual, PagamentoSimulado, PlanoDePagamentos
@@ -56,6 +61,13 @@ ABA_DAS_ONDAS = "Ondas"
 ABA_DA_FILA_POR_MOTIVO = "Fila por motivo"
 ABA_DO_RANKING = "Ranking de migração"
 ABA_DE_PREMISSAS = "Premissas"
+
+RAZOES_DO_RESUMO = tuple(razao for razao in PorQueFicaSolto if razao is not PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO)
+EXPLICACAO_DAS_ONDAS = (
+    "Cada onda acumulada migra os Franqueados das ondas do Ranking de migração até ela; só os Créditos "
+    "desses Franqueados podem chegar identificados."
+)
+EXPLICACAO_DO_SEM_FRANQUEADO = "Créditos sem Franqueado não entram em nenhuma Onda de migração."
 
 _FORMATO_DE_VALOR = "#,##0.00"
 _FORMATO_DE_PERCENTUAL = "0.0%"
@@ -79,14 +91,6 @@ class FonteDaVerdade(StrEnum):
     PROPOSTA_OU_SUGESTAO = "Proposta da Lista ou sugestão da Fila do antes"
 
 
-class PorQueFicaSolto(StrEnum):
-    SEM_TITULO_CONHECIDO = "sem Título conhecido"
-    TITULO_SEM_COBRANCA = "Título sem Cobrança identificada"
-    NAO_IDENTIFICAVEL_PELO_VALOR = "não identificável pelo valor"
-    FRANQUEADO_NAO_MIGRADO = "Franqueado não migrado"
-    FORA_DA_ADESAO = "sorteio acima da Adesão"
-
-
 @dataclass(frozen=True)
 class CenarioDeAdesao:
     adesao: Decimal
@@ -103,6 +107,8 @@ class OndaAcumulada:
 
 @dataclass(frozen=True)
 class AnaliseDeImpacto:
+    momento: datetime
+    pasta: Path
     configuracao: Configuracao
     antes: Resultado
     ranking: RankingDeMigracao
@@ -111,6 +117,48 @@ class AnaliseDeImpacto:
     franqueados: frozenset[str]
     cenarios: tuple[CenarioDeAdesao, ...]
     ondas: tuple[OndaAcumulada, ...]
+
+    @property
+    def relatorio(self) -> RelatorioDeImpacto:
+        todos = len(self.franqueados)
+        return RelatorioDeImpacto(
+            momento=self.momento,
+            pasta_base=str(self.pasta.resolve()),
+            semente=self.configuracao.analise_de_impacto.semente,
+            antes=_numeros(self.antes, None, 0),
+            todos_migrados=tuple(_numeros(c.depois, c.adesao, todos, c.soltos) for c in self.cenarios),
+            ondas=tuple(
+                OndaNoRelatorio(
+                    onda.onda,
+                    tuple(_numeros(c.depois, c.adesao, len(onda.franqueados), c.soltos) for c in onda.cenarios),
+                )
+                for onda in self.ondas
+            ),
+            ranking=self.ranking,
+            premissas=_premissas(self),
+        )
+
+
+def _numeros(
+    resultado: Resultado,
+    adesao: Decimal | None,
+    franqueados_migrados: int,
+    soltos: Mapping[PorQueFicaSolto, TotalDoDestino] | None = None,
+) -> NumerosDoCenario:
+    chegada = ChegadaDosCreditos.do_resultado(resultado)
+    return NumerosDoCenario(
+        adesao=adesao,
+        franqueados_migrados=franqueados_migrados,
+        identificados=chegada.identificados,
+        soltos=chegada.soltos,
+        lista_de_baixa=resultado.resumo.totais[Destino.LISTA_DE_BAIXA],
+        fila_de_excecoes=resultado.resumo.totais[Destino.FILA_DE_EXCECOES],
+        fila_por_motivo={
+            motivo: _total(item for item in resultado.fila_de_excecoes if item.motivo is motivo)
+            for motivo in MotivoDeNaoIdentificacao
+        },
+        soltos_por_razao=dict(soltos or {}),
+    )
 
 
 @dataclass(frozen=True)
@@ -133,6 +181,7 @@ def analisar_impacto(
     gabarito: Iterable[LancamentoEsperado] = (),
     estado: Path | None = None,
 ) -> AnaliseDeImpacto:
+    momento = datetime.now()
     with TemporaryDirectory(prefix="analise_de_impacto_") as nome_da_temporaria:
         temporaria = Path(nome_da_temporaria)
         armazenamento = Armazenamento(temporaria / "antes.sqlite")
@@ -154,6 +203,8 @@ def analisar_impacto(
             migrados |= {franqueado.raiz for franqueado in da_onda}
             ondas.append(OndaAcumulada(numero, migrados, tuple(depois.cenario(adesao, migrados) for adesao in faixa)))
     return AnaliseDeImpacto(
+        momento=momento,
+        pasta=pasta,
         configuracao=configuracao,
         antes=antes,
         ranking=ranking,
@@ -379,19 +430,23 @@ def _total(itens: Iterable[Item]) -> TotalDoDestino:
 
 
 def gerar_workbook_do_impacto(analise: AnaliseDeImpacto, caminho: Path) -> None:
+    gerar_workbook_do_relatorio(analise.relatorio, caminho)
+
+
+def gerar_workbook_do_relatorio(relatorio: RelatorioDeImpacto, caminho: Path) -> None:
     workbook = Workbook()
     resumo = workbook.active
     assert resumo is not None
     resumo.title = ABA_DO_RESUMO
-    _aba_do_resumo(resumo, analise)
-    _aba_das_ondas(workbook.create_sheet(ABA_DAS_ONDAS), analise)
-    _aba_da_fila_por_motivo(workbook.create_sheet(ABA_DA_FILA_POR_MOTIVO), analise)
-    _aba_do_ranking(workbook.create_sheet(ABA_DO_RANKING), analise.ranking)
-    _aba_de_premissas(workbook.create_sheet(ABA_DE_PREMISSAS), analise)
+    _aba_do_resumo(resumo, relatorio)
+    _aba_das_ondas(workbook.create_sheet(ABA_DAS_ONDAS), relatorio)
+    _aba_da_fila_por_motivo(workbook.create_sheet(ABA_DA_FILA_POR_MOTIVO), relatorio)
+    _aba_do_ranking(workbook.create_sheet(ABA_DO_RANKING), relatorio.ranking)
+    _aba_de_premissas(workbook.create_sheet(ABA_DE_PREMISSAS), relatorio)
     workbook.save(caminho)
 
 
-def _aba_do_resumo(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
+def _aba_do_resumo(aba: Worksheet, relatorio: RelatorioDeImpacto) -> None:
     aba.append(
         (
             "Cenário",
@@ -408,34 +463,25 @@ def _aba_do_resumo(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
             "% resolvido sozinho (valor)",
         )
     )
-    linhas: list[tuple[str, Decimal | None, Resultado, TotalDoDestino | None]] = [
-        ("Antes", None, analise.antes, None),
-        *(
-            (
-                "Depois, todos os Franqueados migrados",
-                cenario.adesao,
-                cenario.depois,
-                cenario.soltos[PorQueFicaSolto.NAO_IDENTIFICAVEL_PELO_VALOR],
-            )
-            for cenario in analise.cenarios
-        ),
+    linhas = [
+        ("Antes", relatorio.antes),
+        *(("Depois, todos os Franqueados migrados", cenario) for cenario in relatorio.todos_migrados),
     ]
-    for nome, adesao, resultado, nao_identificaveis in linhas:
-        chegada = ChegadaDosCreditos.do_resultado(resultado)
-        fila = resultado.resumo.totais[Destino.FILA_DE_EXCECOES]
-        parte = ParteAutomatica.dos_totais(resultado.resumo.totais)
+    for nome, numeros in linhas:
+        nao_identificaveis = numeros.soltos_por_razao.get(PorQueFicaSolto.NAO_IDENTIFICAVEL_PELO_VALOR)
+        parte = numeros.parte_automatica
         aba.append(
             (
                 nome,
-                adesao,
-                chegada.identificados.quantidade,
-                _reais(chegada.identificados.valor_centavos),
-                chegada.soltos.quantidade,
-                _reais(chegada.soltos.valor_centavos),
+                numeros.adesao,
+                numeros.identificados.quantidade,
+                _reais(numeros.identificados.valor_centavos),
+                numeros.soltos.quantidade,
+                _reais(numeros.soltos.valor_centavos),
                 nao_identificaveis.quantidade if nao_identificaveis else None,
                 _reais(nao_identificaveis.valor_centavos) if nao_identificaveis else None,
-                fila.quantidade,
-                _reais(fila.valor_centavos),
+                numeros.fila_de_excecoes.quantidade,
+                _reais(numeros.fila_de_excecoes.valor_centavos),
                 _fracao(parte.percentual_da_quantidade),
                 _fracao(parte.percentual_do_valor),
             )
@@ -443,25 +489,32 @@ def _aba_do_resumo(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
         _formatar(aba, valores=(4, 6, 8, 10), percentuais=(11, 12))
     aba.append(())
     aba.append(("Créditos do antes que ficam soltos no depois, por razão",))
-    razoes = [razao for razao in PorQueFicaSolto if razao is not PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO]
-    aba.append(("Adesão (%)", *(f"{razao.value} ({medida})" for razao in razoes for medida in ("Créditos", "valor"))))
-    for cenario in analise.cenarios:
+    aba.append(
+        (
+            "Adesão (%)",
+            *(f"{razao.value} ({medida})" for razao in RAZOES_DO_RESUMO for medida in ("Créditos", "valor")),
+        )
+    )
+    for cenario in relatorio.todos_migrados:
         aba.append(
             (
                 cenario.adesao,
                 *(
                     valor
-                    for razao in razoes
-                    for valor in (cenario.soltos[razao].quantidade, _reais(cenario.soltos[razao].valor_centavos))
+                    for razao in RAZOES_DO_RESUMO
+                    for valor in (
+                        cenario.soltos_por_razao[razao].quantidade,
+                        _reais(cenario.soltos_por_razao[razao].valor_centavos),
+                    )
                 ),
             )
         )
-        _formatar(aba, valores=range(3, 2 * len(razoes) + 2, 2))
+        _formatar(aba, valores=range(3, 2 * len(RAZOES_DO_RESUMO) + 2, 2))
     aba.column_dimensions["A"].width = 40
     aba.freeze_panes = "A2"
 
 
-def _aba_das_ondas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
+def _aba_das_ondas(aba: Worksheet, relatorio: RelatorioDeImpacto) -> None:
     aba.append(
         (
             "Onda acumulada",
@@ -475,56 +528,44 @@ def _aba_das_ondas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
             "% resolvido sozinho (valor)",
         )
     )
-    linhas: list[tuple[str | int, int, Decimal | None, Resultado, int | None]] = [
-        ("Antes", 0, None, analise.antes, None),
-        *(
-            (onda.onda, len(onda.franqueados), cenario.adesao, cenario.depois, _nao_migrados(cenario))
-            for onda in analise.ondas
-            for cenario in onda.cenarios
-        ),
-        *(
-            ("Todos os Franqueados", len(analise.franqueados), cenario.adesao, cenario.depois, _nao_migrados(cenario))
-            for cenario in analise.cenarios
-        ),
+    linhas: list[tuple[str | int, NumerosDoCenario]] = [
+        ("Antes", relatorio.antes),
+        *((onda.onda, cenario) for onda in relatorio.ondas for cenario in onda.cenarios),
+        *(("Todos os Franqueados", cenario) for cenario in relatorio.todos_migrados),
     ]
-    for onda, migrados, adesao, resultado, nao_migrados in linhas:
-        fila = resultado.resumo.totais[Destino.FILA_DE_EXCECOES]
-        parte = ParteAutomatica.dos_totais(resultado.resumo.totais)
+    for onda, numeros in linhas:
+        nao_migrados = numeros.soltos_por_razao.get(PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO)
+        parte = numeros.parte_automatica
         aba.append(
             (
                 onda,
-                migrados,
-                adesao,
-                ChegadaDosCreditos.do_resultado(resultado).identificados.quantidade,
-                nao_migrados,
-                fila.quantidade,
-                _reais(fila.valor_centavos),
+                numeros.franqueados_migrados,
+                numeros.adesao,
+                numeros.identificados.quantidade,
+                nao_migrados.quantidade if nao_migrados else None,
+                numeros.fila_de_excecoes.quantidade,
+                _reais(numeros.fila_de_excecoes.valor_centavos),
                 _fracao(parte.percentual_da_quantidade),
                 _fracao(parte.percentual_do_valor),
             )
         )
         _formatar(aba, valores=(7,), percentuais=(8, 9))
     aba.append(())
-    aba.append(
-        (
-            "Cada onda acumulada migra os Franqueados das ondas do Ranking de migração até ela; só os Créditos "
-            "desses Franqueados podem chegar identificados.",
-        )
-    )
+    aba.append((EXPLICACAO_DAS_ONDAS,))
     aba.column_dimensions["A"].width = 22
     aba.freeze_panes = "A2"
 
 
-def _nao_migrados(cenario: CenarioDeAdesao) -> int:
-    return cenario.soltos[PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO].quantidade
-
-
-def _aba_da_fila_por_motivo(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
-    cenarios = [("antes", analise.antes), *((f"Adesão {_adesao(c.adesao)}", c.depois) for c in analise.cenarios)]
-    aba.append(("Motivo de não identificação", *(f"{nome} ({medida})" for nome, _ in cenarios for medida in ("Créditos", "valor"))))
-    fila_por_cenario = [resultado.fila_de_excecoes for _, resultado in cenarios]
+def _aba_da_fila_por_motivo(aba: Worksheet, relatorio: RelatorioDeImpacto) -> None:
+    cenarios = (relatorio.antes, *relatorio.todos_migrados)
+    aba.append(
+        (
+            "Motivo de não identificação",
+            *(f"{cenario.nome} ({medida})" for cenario in cenarios for medida in ("Créditos", "valor")),
+        )
+    )
     for motivo in (*MotivoDeNaoIdentificacao, None):
-        totais = [_total(i for i in fila if motivo is None or i.motivo is motivo) for fila in fila_por_cenario]
+        totais = [c.fila_de_excecoes if motivo is None else c.fila_por_motivo[motivo] for c in cenarios]
         aba.append(
             (
                 "Total" if motivo is None else motivo.value,
@@ -554,19 +595,32 @@ def _aba_do_ranking(aba: Worksheet, ranking: RankingDeMigracao) -> None:
     sem_franqueado = ranking.sem_franqueado
     aba.append((None, None, sem_franqueado.nome, None, sem_franqueado.quantidade, _reais(sem_franqueado.valor_centavos)))
     _formatar(aba, valores=(6,))
-    aba.append((None, None, "Créditos sem Franqueado não entram em nenhuma Onda de migração."))
+    aba.append((None, None, EXPLICACAO_DO_SEM_FRANQUEADO))
     aba.column_dimensions["C"].width = 60
     aba.freeze_panes = "A2"
 
 
-def _aba_de_premissas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
+def _aba_de_premissas(aba: Worksheet, relatorio: RelatorioDeImpacto) -> None:
+    aba.append(("Premissa", "Valor"))
+    for premissa in relatorio.premissas:
+        aba.append(premissa)
+    aba.column_dimensions["A"].width = 52
+    aba.column_dimensions["B"].width = 120
+
+
+def _premissas(analise: AnaliseDeImpacto) -> tuple[tuple[str, ValorDaPremissa], ...]:
     configuracao = analise.configuracao
     encargo = configuracao.encargo
     parametros = configuracao.analise_de_impacto
     cobranca = analise.conta_de_cobranca
-    premissas: list[tuple[str, int | Decimal | str]] = [
+    return (
         ("Semente", parametros.semente),
-        ("Faixa de Adesão (%)", "; ".join(_adesao(adesao) for adesao in parametros.faixa_de_adesao)),
+        ("Faixa de Adesão (%)", "; ".join(formatar_adesao(adesao) for adesao in parametros.faixa_de_adesao)),
+        (
+            "Proporções do simulador",
+            "não se aplicam: o Plano contrafactual mantém o valor, a data e o Franqueado de cada Crédito do antes; "
+            "as proporções de pagamento parcial, atraso e Crédito solto só valem no Plano por proporções",
+        ),
         ("Multa por atraso (%)", encargo.multa_percentual),
         ("Juros ao mês (%)", encargo.juros_ao_mes_percentual),
         ("Tolerância do Encargo (R$)", _reais(encargo.tolerancia_centavos)),
@@ -586,8 +640,8 @@ def _aba_de_premissas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
         ),
         (
             "Fonte da verdade do Título de cada Crédito",
-            "o gabarito, quando a pasta vem do gerador; senão as decisões confirmadas da Analista, quando um "
-            "armazenamento é informado; senão a Proposta da Lista ou a sugestão da Fila do antes",
+            "o gabarito, quando a pasta vem do gerador; senão as decisões confirmadas da Analista no armazenamento "
+            "da conciliação diária; senão a Proposta da Lista ou a sugestão da Fila do antes",
         ),
         *((f"Créditos pela fonte: {fonte.value}", analise.fontes.get(fonte, 0)) for fonte in FonteDaVerdade),
         (
@@ -635,12 +689,7 @@ def _aba_de_premissas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
             "emissão pela porta simulada, Extratos e Retornos de cobrança gerados pelo simulador e a mesma "
             "conciliação, com armazenamento temporário novo e o mesmo Parecerista de nome",
         ),
-    ]
-    aba.append(("Premissa", "Valor"))
-    for premissa in premissas:
-        aba.append(premissa)
-    aba.column_dimensions["A"].width = 52
-    aba.column_dimensions["B"].width = 120
+    )
 
 
 def _formatar(aba: Worksheet, valores: Iterable[int] = (), percentuais: Iterable[int] = ()) -> None:
@@ -658,10 +707,6 @@ def _fracao(percentual: Fraction | None) -> float | None:
     return float(percentual) / 100 if percentual is not None else None
 
 
-def _adesao(adesao: Decimal) -> str:
-    return f"{adesao:f}".replace(".", ",") + "%"
-
-
 def main(argumentos: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="analisar-impacto",
@@ -674,16 +719,14 @@ def main(argumentos: list[str] | None = None) -> int:
     parser.add_argument(
         "--estado",
         type=Path,
-        help="armazenamento da conciliação diária, cujas decisões confirmadas da Analista dizem qual Título cada "
-        "Crédito paga; só é lido",
+        default=Path("conciliacao.sqlite"),
+        help="armazenamento da conciliação diária: as decisões confirmadas da Analista dizem qual Título cada "
+        "Crédito paga, e o resultado da análise é gravado nele para a tela local",
     )
     opcoes = parser.parse_args(argumentos)
 
     if not opcoes.pasta.is_dir():
         print(f"Pasta base não encontrada: {opcoes.pasta}", file=sys.stderr)
-        return 2
-    if opcoes.estado is not None and not opcoes.estado.is_file():
-        print(f"Armazenamento não encontrado: {opcoes.estado}", file=sys.stderr)
         return 2
     try:
         configuracao = carregar_configuracao(opcoes.configuracao)
@@ -696,13 +739,23 @@ def main(argumentos: list[str] | None = None) -> int:
 
     try:
         analise = analisar_impacto(
-            opcoes.pasta, configuracao, parecerista_da_configuracao(configuracao.ia), estado=opcoes.estado
+            opcoes.pasta,
+            configuracao,
+            parecerista_da_configuracao(configuracao.ia),
+            estado=opcoes.estado if opcoes.estado.is_file() else None,
         )
     except ConferenciaDeSomaFalhou as erro:
         print(str(erro), file=sys.stderr)
         return 1
-    gerar_workbook_do_impacto(analise, opcoes.saida)
-    print(f"Análise de impacto gerada em {opcoes.saida}")
+    relatorio = analise.relatorio
+    gerar_workbook_do_relatorio(relatorio, opcoes.saida)
+    armazenamento = Armazenamento(opcoes.estado)
+    try:
+        with armazenamento.transacao():
+            armazenamento.registrar_analise_de_impacto(relatorio)
+    finally:
+        armazenamento.fechar()
+    print(f"Análise de impacto gerada em {opcoes.saida} e gravada em {opcoes.estado}")
     return 0
 
 

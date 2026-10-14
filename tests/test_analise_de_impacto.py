@@ -323,8 +323,11 @@ def test_configuracao_da_analise_de_impacto_invalida(tmp_path: Path, secao: str)
         carregar_configuracao(_escrever_configuracao(tmp_path / "c.toml", secao))
 
 
-def test_comando_gera_o_workbook_da_analise(pasta: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_comando_gera_o_workbook_da_analise_e_grava_no_armazenamento_padrao(
+    pasta: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     _cenario(pasta)
+    monkeypatch.chdir(tmp_path)
     saida = tmp_path / "impacto.xlsx"
 
     codigo = main([str(pasta), "--configuracao", str(_escrever_configuracao(tmp_path / "c.toml")), "--saida", str(saida)])
@@ -332,6 +335,11 @@ def test_comando_gera_o_workbook_da_analise(pasta: Path, tmp_path: Path, capsys:
     assert codigo == 0
     assert str(saida) in capsys.readouterr().out
     assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Ondas", "Fila por motivo", "Ranking de migração", "Premissas"]
+    armazenamento = Armazenamento(tmp_path / "conciliacao.sqlite")
+    try:
+        assert armazenamento.ultima_analise_de_impacto() is not None
+    finally:
+        armazenamento.fechar()
 
 
 def test_comando_falha_sem_pasta_ou_sem_configuracao(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

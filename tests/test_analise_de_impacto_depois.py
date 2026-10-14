@@ -20,6 +20,7 @@ from conciliacao.dominio import (
     LinhaDeDecisao,
     MotivoDeNaoIdentificacao,
     Natureza,
+    PorQueFicaSolto,
     Resultado,
     TipoDeEvidencia,
     TotalDoDestino,
@@ -30,7 +31,6 @@ from conciliacao.impacto import (
     AnaliseDeImpacto,
     ChegadaDosCreditos,
     FonteDaVerdade,
-    PorQueFicaSolto,
     analisar_impacto,
     gerar_workbook_do_impacto,
     main,
@@ -403,9 +403,7 @@ def test_faixa_de_adesao_invalida(tmp_path: Path, faixa: str) -> None:
         )
 
 
-def test_comando_le_as_decisoes_do_armazenamento_informado(
-    pasta: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_comando_le_as_decisoes_do_armazenamento_informado(pasta: Path, tmp_path: Path) -> None:
     _cenario(pasta)
     configuracao = _escrever_configuracao(tmp_path / "c.toml", "[analise_de_impacto]\nfaixa_de_adesao_percentual = [50]\n")
     estado = tmp_path / "conciliacao.sqlite"
@@ -416,5 +414,3 @@ def test_comando_le_as_decisoes_do_armazenamento_informado(
 
     assert main([str(pasta), "--configuracao", str(configuracao), "--saida", str(saida), "--estado", str(estado)]) == 0
     assert load_workbook(saida).sheetnames[0] == "Resumo do impacto"
-    assert main([str(pasta), "--configuracao", str(configuracao), "--estado", str(tmp_path / "falta.sqlite")]) == 2
-    assert "falta.sqlite" in capsys.readouterr().err

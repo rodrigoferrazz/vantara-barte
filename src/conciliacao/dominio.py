@@ -6,7 +6,7 @@ from enum import StrEnum
 from fractions import Fraction
 from typing import ClassVar
 
-from conciliacao.normalizacao import formatar_percentual, formatar_reais, raiz_do_cnpj
+from conciliacao.normalizacao import formatar_adesao, formatar_percentual, formatar_reais, raiz_do_cnpj
 
 
 class Destino(StrEnum):
@@ -712,6 +712,57 @@ class RankingDeMigracao:
         for franqueado in self.franqueados:
             por_onda.setdefault(franqueado.onda, []).append(franqueado)
         return tuple(tuple(da_onda) for da_onda in por_onda.values())
+
+
+class PorQueFicaSolto(StrEnum):
+    SEM_TITULO_CONHECIDO = "sem Título conhecido"
+    TITULO_SEM_COBRANCA = "Título sem Cobrança identificada"
+    NAO_IDENTIFICAVEL_PELO_VALOR = "não identificável pelo valor"
+    FRANQUEADO_NAO_MIGRADO = "Franqueado não migrado"
+    FORA_DA_ADESAO = "sorteio acima da Adesão"
+
+
+@dataclass(frozen=True)
+class NumerosDoCenario:
+    adesao: Decimal | None
+    franqueados_migrados: int
+    identificados: TotalDoDestino
+    soltos: TotalDoDestino
+    lista_de_baixa: TotalDoDestino
+    fila_de_excecoes: TotalDoDestino
+    fila_por_motivo: Mapping[MotivoDeNaoIdentificacao, TotalDoDestino]
+    soltos_por_razao: Mapping[PorQueFicaSolto, TotalDoDestino]
+
+    @property
+    def nome(self) -> str:
+        return "antes" if self.adesao is None else f"Adesão {formatar_adesao(self.adesao)}"
+
+    @property
+    def parte_automatica(self) -> ParteAutomatica:
+        return ParteAutomatica.dos_totais(
+            {Destino.LISTA_DE_BAIXA: self.lista_de_baixa, Destino.FILA_DE_EXCECOES: self.fila_de_excecoes}
+        )
+
+
+@dataclass(frozen=True)
+class OndaNoRelatorio:
+    onda: int
+    cenarios: tuple[NumerosDoCenario, ...]
+
+
+type ValorDaPremissa = int | Decimal | str
+
+
+@dataclass(frozen=True)
+class RelatorioDeImpacto:
+    momento: datetime
+    pasta_base: str
+    semente: int
+    antes: NumerosDoCenario
+    todos_migrados: tuple[NumerosDoCenario, ...]
+    ondas: tuple[OndaNoRelatorio, ...]
+    ranking: RankingDeMigracao
+    premissas: tuple[tuple[str, ValorDaPremissa], ...]
 
 
 def _franqueado_do_credito(item: Item) -> str | None:
