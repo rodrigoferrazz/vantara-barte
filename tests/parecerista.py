@@ -1,5 +1,11 @@
+import json
+import urllib.request
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 
+import pytest
+
+from conciliacao.configuracao import ConfiguracaoDaIa, carregar_configuracao
 from conciliacao.dominio import Parecer, Resposta
 
 MODELO_FALSO = "modelo-falso"
@@ -24,3 +30,16 @@ class PareceristaFalso:
     @staticmethod
     def _parecer(resposta: Resposta, explicacao: str) -> Parecer:
         return Parecer(resposta=resposta, explicacao=explicacao, modelo=MODELO_FALSO, versao_do_prompt=VERSAO_DO_PROMPT_FALSA)
+
+
+def ollama_do_projeto() -> ConfiguracaoDaIa:
+    ia = carregar_configuracao(Path(__file__).parent.parent / "conciliacao.toml").ia
+    assert ia is not None
+    try:
+        with urllib.request.urlopen(f"{ia.endereco.rstrip('/')}/api/tags", timeout=2) as resposta:
+            modelos = {modelo["name"] for modelo in json.load(resposta)["models"]}
+    except OSError:
+        pytest.skip(f"Ollama não está rodando em {ia.endereco}")
+    if ia.modelo not in modelos:
+        pytest.skip(f"modelo {ia.modelo} não está instalado no Ollama")
+    return ia

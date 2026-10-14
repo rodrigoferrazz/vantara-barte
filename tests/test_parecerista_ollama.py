@@ -1,7 +1,6 @@
 import json
 import socket
 import threading
-import urllib.request
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -11,6 +10,7 @@ import pytest
 from conciliacao.configuracao import ConfiguracaoDaIa, ConfiguracaoInvalida, carregar_configuracao
 from conciliacao.dominio import Resposta
 from conciliacao.parecerista import VERSAO_DO_PROMPT, PareceristaOllama
+from tests.parecerista import ollama_do_projeto
 
 CONTAS = '[[contas]]\npadrao = "itau*.csv"\nbanco = "itau"\nconta = "1"\n'
 
@@ -130,22 +130,9 @@ def test_configuracao_de_ia_invalida_e_recusada(tmp_path: Path, secao: str) -> N
         carregar_configuracao(caminho)
 
 
-def _ollama_do_projeto() -> ConfiguracaoDaIa:
-    ia = carregar_configuracao(Path(__file__).parent.parent / "conciliacao.toml").ia
-    assert ia is not None
-    try:
-        with urllib.request.urlopen(f"{ia.endereco.rstrip('/')}/api/tags", timeout=2) as resposta:
-            modelos = {modelo["name"] for modelo in json.load(resposta)["models"]}
-    except OSError:
-        pytest.skip(f"Ollama não está rodando em {ia.endereco}")
-    if ia.modelo not in modelos:
-        pytest.skip(f"modelo {ia.modelo} não está instalado no Ollama")
-    return ia
-
-
 @pytest.mark.integracao
 def test_ollama_real_responde_parecer_estruturado() -> None:
-    parecerista = PareceristaOllama(_ollama_do_projeto())
+    parecerista = PareceristaOllama(ollama_do_projeto())
 
     parecer = parecerista.dar_parecer("CONF ALVORADA COM", ["Confeitaria Alvorada Comercio de Alimentos Ltda"])
 

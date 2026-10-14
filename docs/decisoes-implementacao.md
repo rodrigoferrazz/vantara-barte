@@ -541,3 +541,27 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** conflito é o mesmo identificador de item com linha no workbook aplicável (salvo pela Analista e da última execução) e decisão pendente da tela, mesmo que as decisões coincidam. Toda linha da Lista de baixa de um workbook salvo conta como decisão (o "confirmar" pré-preenchido e a célula vazia também), e na Fila só as linhas com decisão. Nenhuma das duas é aplicada, o conflito vai para `conflitos_das_decisoes` (Resumo e tela, numa seção destacada) e a decisão da tela é dada como lida: o item volta a aparecer para nova decisão, sem conflito repetido. Workbook ignorado (sem autor, de outra execução) não gera conflito. O aviso de Título usado por mais de uma decisão passou a valer entre as duas origens.
 - **Por quê:** a spec adota a interpretação literal e diz que a plataforma não escolhe entre as origens; a linha pré-preenchida é uma decisão do workbook salvo, como no ticket 12.
 - **Alternativas:** só linhas alteradas pela Analista contarem (o workbook não guarda o que foi alterado); manter a decisão da tela pendente após o conflito.
+
+## Ticket 17: o teste de aceitação lê a pasta da amostra
+
+- **Decisão:** só o código de teste lê `data/`; a tabela esperada da spec fica no próprio teste de aceitação (`tests/test_aceitacao_amostra_julho.py`) e nenhum valor da amostra entra no código de produção. O teste roda a plataforma pela mesma entrada do comando (`executar_conciliacao`) com o `conciliacao.toml` do projeto, para refletir o que `uv run conciliar data/` faz. A confirmação do usuário pedida pela spec continua em aberto.
+- **Por quê:** a restrição do usuário é sobre valores no código, não sobre o teste ler os arquivos; é a opção mais conservadora enquanto não há resposta e evita copiar os arquivos da amostra para dentro dos testes.
+- **Alternativas:** copiar a amostra para fixtures em `tests/` (duplicaria os dados); recriar a amostra com os construtores de `tests/arquivos.py` (perderia o formato exato dos arquivos reais).
+
+## Ticket 17: IA falsa na suíte padrão e Ollama real na integração
+
+- **Decisão:** a aceitação roda com duas origens de parecer: a IA falsa, que responde "sim" só para os dois pares que a spec dá como parecer positivo (DOCE PONTO COM ALIME e SABOR CIA), na suíte padrão; e o Ollama do `conciliacao.toml`, marcado `integracao`, pulado se o Ollama ou o modelo não estiver disponível. As mesmas asserções valem para as duas. Onde o resultado diverge da spec, o teste mantém a expectativa da spec e fica marcado `xfail(strict=True)` com a causa.
+- **Por quê:** a parte determinística (identificação, somas, Encargo, destinos, cobrança) não deve depender do Ollama; a IA falsa só substitui o parecer validado pelo usuário, sem mudar regra nenhuma. O `strict` faz o teste falhar quando a divergência deixar de existir.
+- **Alternativas:** ajustar as expectativas ao resultado atual (esconderia as divergências); só o teste com Ollama real (a suíte padrão dependeria do serviço).
+
+## Ticket 17: divergências da amostra mantidas como xfail
+
+- **Decisão:** três divergências ficam registradas como `xfail(strict=True)`, sem mudar regra de produção: o PIX de 30/07 (1.850,00) sai "valor não fecha" em vez de "Crédito sem título em aberto" (ticket 06, Títulos propostos ou sugeridos não são reservados); "em análise" dá 14 em vez de 9 (ticket 09 conta Crédito candidato na Lista ou na Fila); com o Ollama real, DOCE PONTO e SABOR CIA saem "sem identificação do pagador" com evidência só valor (ticket 08, o `qwen2.5:3b` responde "não"). O TED de 14/07 tem a sugestão NF 104533 + NF 104588 nos dois casos: com o "sim" pelo parecer, com o "não" pela sugestão por valor do Franqueado candidato.
+- **Por quê:** a regra é aplicada como princípio e não é ajustada aos exemplos; as duas primeiras dependem de decisão do usuário (reservar Títulos já propostos, o que conta como "em análise") e a terceira é limitação do modelo.
+- **Alternativas:** reservar Títulos propostos na Lista ou sugeridos na Fila; contar só a Fila em "em análise"; ajustar o prompt aos nomes da amostra.
+
+## Ticket 17: verificação de identificadores da amostra no código de produção
+
+- **Decisão:** o teste lê os arquivos da amostra e monta os identificadores: nomes dos clientes dos Títulos e nomes do pagador no histórico do Extrato (depois dos prefixos de canal do adaptador), documentos e o número final de cada um, CNPJs (formatados e só dígitos), nossos números, números de 5 ou mais dígitos do Extrato e cada valor em quatro formas (`18.450,00`, `18450,00`, `18450.00`, centavos). Procura cada um, sem diferenciar maiúsculas e como palavra inteira, em todo `src/`. Textos genéricos de banco (como "DEPOSITO NAO IDENTIFICADO" e "TARIFA PIX EMISSAO") não contam como nome. A verificação achou um CNPJ da amostra como exemplo de formato numa mensagem de erro de `normalizacao.py`, trocado por `00.000.000/0000-00`.
+- **Por quê:** derivar a lista dos arquivos garante que um dado novo da amostra também é verificado, sem repetir a amostra no teste; a palavra inteira evita falso positivo com números que só contêm um valor.
+- **Alternativas:** lista fixa de identificadores no teste; procurar também em `conciliacao.toml` (configuração, não código).

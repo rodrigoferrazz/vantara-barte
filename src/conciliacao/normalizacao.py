@@ -59,7 +59,7 @@ def formatar_percentual(percentual: Fraction, simbolo: bool = True) -> str:
 
 def cnpj(texto: str) -> str:
     if not _CNPJ_INTEIRO.fullmatch(texto):
-        raise FormatoInvalido(f"CNPJ '{texto}' não está no formato 12.345.678/0001-90 nem tem 14 dígitos")
+        raise FormatoInvalido(f"CNPJ '{texto}' não está no formato 00.000.000/0000-00 nem tem 14 dígitos")
     return _so_digitos(texto)
 
 
