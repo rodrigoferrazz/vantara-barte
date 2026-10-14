@@ -427,3 +427,45 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** toda decisão sobre Crédito copia os pareceres do item (Franqueado, resposta, explicação, modelo e versão do prompt), em tabela própria. Substitui a observação do ticket 12 de que pareceres não eram copiados.
 - **Por quê:** a spec pede modelo e versão do prompt na decisão quando há parecer, e agora a Fila, que tem parecer, também é decidida.
 - **Alternativas:** guardar só modelo e versão do prompt (perderia a resposta que a Analista viu).
+
+## Ticket 14: fotografia anterior por Sistema de origem
+
+- **Decisão:** cada execução guarda quais Sistemas de origem tiveram exportação lida (inclusive exportação só com cabeçalho). Um Título "sumiu" quando estava na fotografia anterior do seu Sistema (a última execução que leu exportação dele) e não está na exportação atual. Sistema sem exportação na execução não é comparado.
+- **Por quê:** comparar com a execução anterior como um todo faria todos os Títulos do Omie "sumirem" num dia em que só veio o Protheus, gerando Baixados por fora falsos.
+- **Alternativas:** comparar com a execução imediatamente anterior; exigir sempre todas as exportações (recusaria execuções parciais).
+
+## Ticket 14: Título proposto e ainda não confirmado que some
+
+- **Decisão:** Título que some sem confirmação em vigor, mas que estava proposto ou sugerido em algum item da última execução, sai de tudo sem virar Baixado por fora; o Crédito continua vivo e é reclassificado. Título cancelado na origem por "mesma dívida" que some também não é Baixado por fora.
+- **Por quê:** o ADR 0004 diz que Título proposto que some foi baixado pela Analista; o ticket só chama de Baixado por fora o não proposto. O Crédito não é encerrado porque não há decisão da Analista sobre ele.
+- **Alternativas:** tratar como Baixado por fora (contradiz o ADR); encerrar o Crédito junto (a plataforma decidiria sozinha).
+
+## Ticket 14: Divergência de baixa
+
+- **Decisão:** há Divergência de baixa quando some, sem confirmação em vigor, um Título do mesmo Franqueado e do mesmo Sistema de origem de uma confirmação ainda Aguardando baixa no ERP. A confirmação deixa de valer (o Crédito volta a ser vivo e o Título confirmado volta a ter Saldo), mas o Pagador conhecido aprendido nela continua. Enquanto o Crédito estiver vivo, ele vai sempre para a Fila: se o motor o mandaria para a Lista, vai como "mais de uma combinação possível", com a explicação da divergência. O Título sumido aparece como "Divergência de baixa" no Acompanhamento do ERP da execução que a detectou e não como Baixado por fora. Havendo mais de uma confirmação aguardando nesse Franqueado e Sistema, todas voltam para a Fila.
+- **Por quê:** a Analista dá baixa no mesmo Sistema de origem do Título proposto; sem como saber qual confirmação foi trocada, devolver todas é o lado conservador. "Mais de uma combinação possível" é o Motivo da lista fixa que descreve o caso: o Título da plataforma ou o baixado no ERP. Segue o precedente do par rejeitado do ticket 12.
+- **Alternativas:** manter a confirmação e só avisar (o ticket manda o caso para a Fila); exigir Franqueado e valor iguais; desfazer também o Pagador conhecido (a divergência é sobre o Título, não sobre quem pagou).
+
+## Ticket 14: Saldo pelas decisões e pagamento parcial
+
+- **Decisão:** toda confirmação guarda, por Título, o principal aplicado: o menor entre o Crédito e o Saldo, num Título só; o Saldo de cada Título, em confirmação de vários. O Saldo de um Título é o valor da exportação atual menos o principal das confirmações em vigor cujo Título não mudou de valor em nenhuma exportação desde a execução do item confirmado; se mudou, a confirmação já está refletida no ERP e não é descontada de novo. Título com Saldo zero sai do motor e da cobrança; com Saldo positivo continua em aberto e o motor e a Lista de cobrança usam o Saldo (o Encargo previsto também é calculado sobre ele). A Baixa manual no ERP mostra o principal aplicado. Confirmação de vários Títulos com Crédito menor que a soma dos Saldos não é aplicada, com aviso. Substitui o efeito do ticket 12 e 13 de tirar o Título confirmado dos Títulos em aberto mesmo em Diferença a menor, e o "Saldo antes das decisões" do ticket 09.
+- **Por quê:** o CONTEXT define o Saldo assim e a história 72 pede que o pagamento parcial nunca seja descontado duas vezes. Dividir um Crédito menor entre vários Títulos exigiria a plataforma escolher a imputação.
+- **Alternativas:** comparar só a exportação atual com a do item confirmado (ignoraria uma mudança que voltou ao valor antigo); imputar o pagamento parcial pelo vencimento mais antigo; o motor seguir com o valor do ERP (proporia um Título parcialmente pago para um Crédito do valor cheio).
+
+## Ticket 14: reversão pelo Excel
+
+- **Decisão:** nova aba "Reverter confirmação", vazia, com as colunas Item e Motivo da reversão; a Analista escreve o identificador do item confirmado (o mesmo da Baixa manual no ERP e do Acompanhamento do ERP). Só confirmações em vigor podem ser revertidas, e o motivo é obrigatório; o resto vira aviso no Resumo. Valem as regras de autor e execução do workbook do ticket 12. A reversão é gravada como decisão "reverter" com autor, momento, motivo e os Títulos da confirmação, e o Resumo conta as revertidas em "Decisões lidas do Excel".
+- **Por quê:** o Título confirmado e já baixado sai de todas as saídas, então a reversão não pode depender de uma linha que mostre o item; o motivo segue o padrão da rejeição, para que toda desfeita fique explicada.
+- **Alternativas:** coluna de decisão na aba Acompanhamento do ERP (só cobriria Títulos ainda abertos); listar todas as confirmações já feitas (cresceria sem fim e contradiz "sai de todas as saídas"); reverter outras decisões (o ticket só fala de confirmação).
+
+## Ticket 14: efeito da reversão
+
+- **Decisão:** a reversão faz o Crédito voltar a ser vivo, o Título voltar a ter Saldo e os pares da confirmação revertida passarem a valer como pares rejeitados (motivo "confirmação revertida, ..."), então o Crédito vai para a Fila pelo caminho da rejeição do ticket 12. Os vínculos de Pagador conhecido gravados naquela decisão deixam de contar. Se o Título não está na exportação, aparece como "Estorno necessário no ERP" em toda execução até reaparecer em alguma fotografia depois da reversão; depois disso não volta a ser marcado.
+- **Por quê:** reverter é dizer que aquela ligação estava errada; tratá-la como rejeição evita que a mesma regra a reproponha para a Lista. A Analista ainda pode escolher o mesmo Título na Fila.
+- **Alternativas:** devolver o Crédito ao motor sem rejeitar o par e forçar a Fila (o Motivo sairia "mais de uma combinação possível" sem haver duas opções).
+
+## Ticket 14: saídas do acompanhamento do ERP
+
+- **Decisão:** aba "Acompanhamento do ERP", logo depois de Cancelar na origem e antes de Reverter confirmação, com Situação, Título, Sistema de origem, Franqueado, CNPJ, Vencimento, Valor, Saldo, Item e Explicação. Aguardando baixa no ERP e Estorno necessário no ERP aparecem em toda execução enquanto valem; Baixado por fora e Divergência de baixa só na execução que os detectou (ficam guardados). O Resumo ganha uma linha com a quantidade de cada situação. A Baixa manual no ERP deixa de listar Título que já não está na exportação do seu Sistema. O teste do comando que lista exatamente as abas passou a incluir as duas abas novas.
+- **Por quê:** Título confirmado que some sai de todas as saídas (história 68); um evento já registrado repetido todo dia esconderia os novos.
+- **Alternativas:** abas separadas por situação; repetir Baixados por fora em todas as execuções.

@@ -11,6 +11,6 @@
 - [x] Título com Crédito candidato na Lista ou na Fila não entra na cobrança e aparece como 'em análise'
 - [x] Título marcado como Possível duplicidade não entra na cobrança
 - [x] Boleto dentro de 2 dias úteis após o Vencimento efetivo não entra na cobrança
-- [ ] Título com pagamento parcial confirmado entra só pelo Saldo
+- [x] Título com pagamento parcial confirmado entra só pelo Saldo
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

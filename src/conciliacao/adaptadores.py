@@ -28,12 +28,14 @@ class Leitura:
     lancamentos: list[Lancamento] = field(default_factory=list)
     arquivos_lidos: list[str] = field(default_factory=list)
     arquivos_recusados: list[ArquivoRecusado] = field(default_factory=list)
+    sistemas_exportados: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
 class ConteudoDoArquivo:
     titulos: list[Titulo] = field(default_factory=list)
     lancamentos: list[Lancamento] = field(default_factory=list)
+    sistema_exportado: str | None = None
 
 
 class Adaptador(Protocol):
@@ -46,6 +48,7 @@ class Adaptador(Protocol):
 
 class ProtheusContasAReceber:
     nome = "exportação Protheus"
+    sistema_de_origem = "Protheus"
     cabecalho: tuple[str, ...] = ("cliente", "cnpj", "unidade", "documento", "nosso_numero", "tipo", "emissao", "vencimento", "valor", "status")
     separador = ";"
 
@@ -57,7 +60,7 @@ class ProtheusContasAReceber:
                 raise Recusa(f"linha {numero}: status '{campos['status']}' desconhecido; só 'Aberto' é aceito")
             titulos.append(
                 Titulo(
-                    sistema_de_origem="Protheus",
+                    sistema_de_origem=self.sistema_de_origem,
                     documento=campos["documento"],
                     cliente=campos["cliente"],
                     cnpj=_formato(numero, cnpj, campos["cnpj"]),
@@ -66,11 +69,12 @@ class ProtheusContasAReceber:
                     valor_centavos=_formato(numero, centavos_de_valor_ptbr, campos["valor"]),
                 )
             )
-        return ConteudoDoArquivo(titulos=titulos)
+        return ConteudoDoArquivo(titulos=titulos, sistema_exportado=self.sistema_de_origem)
 
 
 class OmieTitulos:
     nome = "exportação Omie"
+    sistema_de_origem = "Omie"
     cabecalho: tuple[str, ...] = ("customer_name", "tax_id", "invoice_ref", "due_date", "amount", "paid_flag")
     separador = ","
 
@@ -82,7 +86,7 @@ class OmieTitulos:
                 raise Recusa(f"linha {numero}: paid_flag '{campos['paid_flag']}' desconhecido; só 'N' é aceito")
             titulos.append(
                 Titulo(
-                    sistema_de_origem="Omie",
+                    sistema_de_origem=self.sistema_de_origem,
                     documento=campos["invoice_ref"],
                     cliente=campos["customer_name"],
                     cnpj=_formato(numero, cnpj_sem_pontuacao, campos["tax_id"]),
@@ -91,7 +95,7 @@ class OmieTitulos:
                     valor_centavos=_formato(numero, centavos_de_valor_com_ponto, campos["amount"]),
                 )
             )
-        return ConteudoDoArquivo(titulos=titulos)
+        return ConteudoDoArquivo(titulos=titulos, sistema_exportado=self.sistema_de_origem)
 
 
 class ExtratoItau:
@@ -171,6 +175,8 @@ def ler_pasta(pasta: Path, configuracao: Configuracao) -> Leitura:
             leitura.arquivos_lidos.append(arquivo.name)
             leitura.titulos.extend(conteudo.titulos)
             leitura.lancamentos.extend(conteudo.lancamentos)
+            if conteudo.sistema_exportado is not None:
+                leitura.sistemas_exportados.add(conteudo.sistema_exportado)
     return leitura
 
 

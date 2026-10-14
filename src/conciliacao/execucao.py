@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+from conciliacao.acompanhamento import acompanhar_o_erp, chave_do_titulo
 from conciliacao.adaptadores import canal_do_credito, ler_pasta, nome_do_pagador
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.configuracao import Configuracao
@@ -13,10 +14,13 @@ from conciliacao.dominio import (
     Classificacao,
     DataDeReferencia,
     DecisoesLidas,
+    Destino,
     Lancamento,
+    MotivoDeNaoIdentificacao,
     Natureza,
     Resultado,
     TipoDeDecisao,
+    Titulo,
     UltimaDataDaConta,
 )
 from conciliacao.motor import conciliar, lista_de_cobranca, possiveis_duplicidades
@@ -37,31 +41,49 @@ def executar_conciliacao(
             if workbook_anterior is not None and workbook_anterior.exists()
             else DecisoesAplicadas(DecisoesLidas(), ())
         )
-        baixados = armazenamento.titulos_com_baixa_confirmada()
         cancelados = armazenamento.titulos_cancelados_na_origem()
-        na_exportacao = [t for t in leitura.titulos if (t.sistema_de_origem, t.documento) not in cancelados]
-        titulos = [t for t in na_exportacao if (t.sistema_de_origem, t.documento) not in baixados]
+        acompanhamento = acompanhar_o_erp(
+            atuais=leitura.titulos,
+            anteriores=armazenamento.fotografia_anterior(leitura.sistemas_exportados),
+            confirmacoes=armazenamento.confirmacoes_em_vigor(),
+            revertidas=armazenamento.confirmacoes_revertidas(),
+            propostos=armazenamento.titulos_propostos_na_ultima_execucao(),
+            cancelados=cancelados,
+        )
+        for divergencia in acompanhamento.divergencias:
+            armazenamento.registrar_divergencia(divergencia.confirmacao.decisao, divergencia.baixado, divergencia.explicacao)
+        na_exportacao = [t for t in leitura.titulos if chave_do_titulo(t) not in cancelados]
+        originais = {chave_do_titulo(t): t for t in na_exportacao}
+        titulos = [
+            replace(t, valor_centavos=saldo)
+            for t in na_exportacao
+            if (saldo := acompanhamento.saldos[chave_do_titulo(t)]) > 0
+        ]
         identificadores, novos = armazenamento.guardar_lancamentos(leitura.lancamentos)
         lancamentos: dict[int, Lancamento] = {}
         for lancamento in leitura.lancamentos:
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
-        classificacoes = _com_antecipacoes(
-            conciliar(
-                titulos,
-                lancamentos.values(),
-                armazenamento.franqueados().values(),
-                configuracao.encargo,
-                nome_do_pagador,
-                canal_do_credito,
-                configuracao.limite_de_combinacoes,
-                parecerista,
-                armazenamento.pares_rejeitados(),
-                armazenamento.pagadores_conhecidos(),
+        pelo_saldo = _com_divergencias(
+            _com_antecipacoes(
+                conciliar(
+                    titulos,
+                    lancamentos.values(),
+                    armazenamento.franqueados().values(),
+                    configuracao.encargo,
+                    nome_do_pagador,
+                    canal_do_credito,
+                    configuracao.limite_de_combinacoes,
+                    parecerista,
+                    armazenamento.pares_rejeitados(),
+                    armazenamento.pagadores_conhecidos(),
+                ),
+                armazenamento.antecipacoes(),
             ),
-            armazenamento.antecipacoes(),
+            armazenamento.divergencias(),
         )
+        classificacoes = [_com_titulos_da_exportacao(c, originais) for c in pelo_saldo]
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
         ultimas_datas = armazenamento.ultimas_datas()
@@ -73,7 +95,10 @@ def executar_conciliacao(
         )
         decididas = armazenamento.duplicidades_decididas()
         duplicidades = [d for d in possiveis_duplicidades(na_exportacao) if d.chave not in decididas]
-        cobranca = lista_de_cobranca(titulos, classificacoes, duplicidades, data_de_referencia.data)
+        cobranca = [
+            replace(na_cobranca, titulo=originais[chave_do_titulo(na_cobranca.titulo)])
+            for na_cobranca in lista_de_cobranca(titulos, pelo_saldo, duplicidades, data_de_referencia.data)
+        ]
         execucao = armazenamento.registrar_execucao(
             lancamentos_novos=novos,
             arquivos_lidos=leitura.arquivos_lidos,
@@ -88,6 +113,8 @@ def executar_conciliacao(
             decisoes_aplicadas=decisoes.registradas,
             avisos_das_decisoes=decisoes.lidas.nao_aplicadas,
             decisoes_de_duplicidade_aplicadas=decisoes.duplicidades,
+            sistemas_exportados=leitura.sistemas_exportados,
+            acompanhamento_do_erp=acompanhamento.situacoes,
         )
     return armazenamento.carregar_resultado(execucao)
 
@@ -105,3 +132,38 @@ def _com_antecipacoes(
         else c
         for c in classificacoes
     ]
+
+
+def _com_divergencias(
+    classificacoes: list[Classificacao], divergencias: Mapping[ChaveNatural, list[str]]
+) -> list[Classificacao]:
+    com_divergencia = []
+    for c in classificacoes:
+        explicacoes = divergencias.get(c.lancamento.chave_natural)
+        if not explicacoes:
+            com_divergencia.append(c)
+            continue
+        explicacao = " ".join((c.explicacao, *explicacoes))
+        if c.destino is Destino.LISTA_DE_BAIXA:
+            com_divergencia.append(
+                replace(
+                    c,
+                    destino=Destino.FILA_DE_EXCECOES,
+                    explicacao=explicacao,
+                    motivo=MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+                    regra=None,
+                )
+            )
+        else:
+            com_divergencia.append(replace(c, explicacao=explicacao))
+    return com_divergencia
+
+
+def _com_titulos_da_exportacao(
+    classificacao: Classificacao, originais: Mapping[tuple[str, str], Titulo]
+) -> Classificacao:
+    return replace(
+        classificacao,
+        titulos=tuple(originais[chave_do_titulo(t)] for t in classificacao.titulos),
+        citados=tuple(originais[chave_do_titulo(t)] for t in classificacao.citados),
+    )

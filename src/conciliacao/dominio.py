@@ -86,6 +86,7 @@ class TipoDeDecisao(StrEnum):
     CONCILIADO_FORA = "conciliado fora"
     MESMA_DIVIDA = "mesma dívida"
     DIVIDAS_DISTINTAS = "dívidas distintas"
+    REVERTER = "reverter"
 
     @property
     def encerra_o_credito(self) -> bool:
@@ -296,6 +297,7 @@ class DecisoesLidas:
     classificadas: int = 0
     conciliados_fora: int = 0
     duplicidades: int = 0
+    revertidas: int = 0
 
 
 @dataclass(frozen=True)
@@ -342,6 +344,47 @@ class DataDeReferencia:
         if sem_extrato:
             return sem_extrato
         return tuple(conta for conta in self.contas if conta.ultima_data == self.data)
+
+
+class SituacaoNoErp(StrEnum):
+    AGUARDANDO_BAIXA_NO_ERP = "Aguardando baixa no ERP"
+    BAIXADO_POR_FORA = "Baixado por fora"
+    DIVERGENCIA_DE_BAIXA = "Divergência de baixa"
+    ESTORNO_NECESSARIO_NO_ERP = "Estorno necessário no ERP"
+
+
+@dataclass(frozen=True)
+class TituloNoAcompanhamento:
+    situacao: SituacaoNoErp
+    titulo: Titulo
+    item: str | None
+    explicacao: str
+    saldo_centavos: int | None = None
+
+
+@dataclass(frozen=True)
+class TituloConfirmado:
+    titulo: Titulo
+    principal_centavos: int
+    valores_posteriores: frozenset[int]
+
+    def absorvido_pelo_erp(self, valor_atual_centavos: int) -> bool:
+        return any(valor != self.titulo.valor_centavos for valor in self.valores_posteriores | {valor_atual_centavos})
+
+
+@dataclass(frozen=True)
+class ConfirmacaoEmVigor:
+    decisao: int
+    item: str
+    credito: ChaveNatural
+    titulos: tuple[TituloConfirmado, ...]
+
+
+@dataclass(frozen=True)
+class ConfirmacaoRevertida:
+    item: str
+    motivo: str
+    sem_reaparecer: tuple[Titulo, ...]
 
 
 @dataclass(frozen=True)
@@ -440,6 +483,7 @@ class Resultado:
     baixa_manual: tuple[BaixaManual, ...]
     cancelar_na_origem: tuple[TituloACancelar, ...] = ()
     conciliados_fora: tuple[Item, ...] = ()
+    acompanhamento_do_erp: tuple[TituloNoAcompanhamento, ...] = ()
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]

@@ -47,6 +47,8 @@ def test_comando_gera_workbook_com_resumo_no_topo_e_as_quatro_abas(tmp_path: Pat
         "Lista de baixa",
         "Baixa manual no ERP",
         "Cancelar na origem",
+        "Acompanhamento do ERP",
+        "Reverter confirmação",
         "Fila de exceções",
         "Lista de cobrança",
         "Causa raiz",

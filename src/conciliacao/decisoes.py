@@ -2,7 +2,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from zipfile import BadZipFile
@@ -10,6 +10,7 @@ from zipfile import BadZipFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
+from conciliacao.acompanhamento import saldos
 from conciliacao.adaptadores import nome_do_pagador
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.dominio import (
@@ -28,6 +29,7 @@ from conciliacao.normalizacao import nome_normalizado
 from conciliacao.saidas import (
     ABA_DA_FILA_DE_EXCECOES,
     ABA_DA_LISTA_DE_BAIXA,
+    ABA_DE_REVERSAO,
     COLUNA_DA_DECISAO,
     COLUNA_DA_REFERENCIA_DO_CONCILIADO_FORA,
     COLUNA_DO_FRANQUEADO_DO_CONCILIADO_FORA,
@@ -109,15 +111,21 @@ class _Interpretacao:
         self._lista = {item.identificador: item for item in resultado.lista_de_baixa}
         self._fila = {item.identificador: item for item in resultado.fila_de_excecoes}
         self._duplicidades = {item.identificador: item for item in resultado.itens_de_titulo}
-        fechados = armazenamento.titulos_com_baixa_confirmada() | armazenamento.titulos_cancelados_na_origem()
+        titulos = armazenamento.titulos_da_execucao(execucao)
+        cancelados = armazenamento.titulos_cancelados_na_origem()
+        self._saldos = saldos(titulos, armazenamento.confirmacoes_em_vigor())
         self._abertos = {
-            _chave(titulo): titulo for titulo in armazenamento.titulos_da_execucao(execucao) if _chave(titulo) not in fechados
+            _chave(titulo): titulo
+            for titulo in titulos
+            if _chave(titulo) not in cancelados and self._saldos[_chave(titulo)] > 0
         }
         self._nomes = {raiz: franqueado.todos_os_nomes for raiz, franqueado in armazenamento.franqueados().items()}
 
     def interpretar(self, linha: _LinhaDeDecisao) -> _Decisao:
         if linha.aba == ABA_DA_LISTA_DE_BAIXA:
             return self._da_lista(linha)
+        if linha.aba == ABA_DE_REVERSAO:
+            return self._reversao(linha)
         if linha.item in self._fila:
             return self._do_credito_da_fila(linha, self._fila[linha.item])
         if linha.item in self._duplicidades:
@@ -145,6 +153,21 @@ class _Interpretacao:
                 item.identificador, tipo, frozenset(), lambda: self._registrar(item, tipo, item.titulos, linha.motivo)
             )
         return self._confirmacao(item, item.titulos)
+
+    def _reversao(self, linha: _LinhaDeDecisao) -> _Decisao:
+        confirmacao = self._armazenamento.confirmacao_em_vigor_do_item(linha.item)
+        if confirmacao is None:
+            raise _NaoAplicada(f"Item {linha.item}: não há confirmação em vigor para reverter; não aplicada.")
+        if not linha.motivo:
+            raise _NaoAplicada(f"Item {linha.item}: reversão sem motivo; não aplicada.")
+        return _Decisao(
+            linha.item,
+            TipoDeDecisao.REVERTER,
+            frozenset(),
+            lambda: self._armazenamento.registrar_reversao(
+                confirmacao, linha.motivo, self._autor, self._momento, ORIGEM_EXCEL
+            ),
+        )
 
     def _do_credito_da_fila(self, linha: _LinhaDeDecisao, item: Item) -> _Decisao:
         tipo = _tipo(linha.decisao, _DECISOES_DE_CREDITO_DA_FILA)
@@ -214,14 +237,35 @@ class _Interpretacao:
         return _Decisao(item.identificador, tipo, outros, registrar)
 
     def _confirmacao(self, item: Item, titulos: tuple[Titulo, ...]) -> _Decisao:
+        devidos = tuple(replace(titulo, valor_centavos=self._saldos[_chave(titulo)]) for titulo in titulos)
+        credito = item.lancamento
+        if len(devidos) > 1 and credito.valor_centavos < sum(devido.valor_centavos for devido in devidos):
+            raise _NaoAplicada(
+                f"Item {item.identificador}: o Crédito é menor que a soma dos Saldos dos Títulos {_descrever(titulos)}; "
+                "a plataforma não escolhe como dividir um pagamento parcial; não aplicada."
+            )
+        encargos = _encargos(devidos, credito, self._encargo)
+        principais = {
+            _chave(devido): min(credito.valor_centavos, devido.valor_centavos) if len(devidos) == 1 else devido.valor_centavos
+            for devido in devidos
+        }
+
         def registrar() -> int:
-            decisao = self._registrar(item, TipoDeDecisao.CONFIRMAR, titulos)
+            decisao = self._registrar(item, TipoDeDecisao.CONFIRMAR, titulos, encargos=encargos, principais=principais)
             self._vincular_pagador(decisao, item, titulos)
             return decisao
 
         return _Decisao(item.identificador, TipoDeDecisao.CONFIRMAR, frozenset(map(_chave, titulos)), registrar)
 
-    def _registrar(self, item: Item, tipo: TipoDeDecisao, titulos: tuple[Titulo, ...], motivo: str | None = None) -> int:
+    def _registrar(
+        self,
+        item: Item,
+        tipo: TipoDeDecisao,
+        titulos: tuple[Titulo, ...],
+        motivo: str | None = None,
+        encargos: Mapping[ChaveDoTitulo, int] | None = None,
+        principais: Mapping[ChaveDoTitulo, int] | None = None,
+    ) -> int:
         return self._armazenamento.registrar_decisao(
             execucao=self._execucao,
             item=item.identificador,
@@ -230,7 +274,8 @@ class _Interpretacao:
             autor=self._autor,
             momento=self._momento,
             origem=ORIGEM_EXCEL,
-            encargos=_encargos(titulos, item.lancamento, self._encargo),
+            encargos=encargos if encargos is not None else {_chave(titulo): 0 for titulo in titulos},
+            principais=principais,
         )
 
     def _vincular_pagador(self, decisao: int, item: Item, titulos: tuple[Titulo, ...]) -> None:
@@ -331,6 +376,7 @@ def aplicar_decisoes_do_excel(
             classificadas=sum(1 for tipo in tipos if tipo.classifica_credito_sem_titulo),
             conciliados_fora=tipos.count(TipoDeDecisao.CONCILIADO_FORA),
             duplicidades=len(duplicidades),
+            revertidas=tipos.count(TipoDeDecisao.REVERTER),
         ),
         tuple(registradas),
         tuple(duplicidades),
@@ -413,11 +459,20 @@ def _ler(caminho: Path) -> _WorkbookLido:
                 "referencia": COLUNA_DA_REFERENCIA_DO_CONCILIADO_FORA,
             },
         )
+        reversoes = (
+            tuple(
+                _LinhaDeDecisao(ABA_DE_REVERSAO, _celula(linha, 0), TipoDeDecisao.REVERTER.value, _celula(linha, 1))
+                for linha in livro[ABA_DE_REVERSAO].iter_rows(min_row=2, values_only=True)
+                if _celula(linha, 0)
+            )
+            if ABA_DE_REVERSAO in livro.sheetnames
+            else ()
+        )
         return _WorkbookLido(
             execucao=execucao,
             autor=(livro.properties.lastModifiedBy or "").strip(),
             momento=livro.properties.modified,
-            linhas=(*lista, *(linha for linha in fila if linha.decisao)),
+            linhas=(*lista, *(linha for linha in fila if linha.decisao), *reversoes),
         )
     finally:
         livro.close()

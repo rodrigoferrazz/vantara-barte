@@ -15,10 +15,12 @@ from conciliacao.dominio import (
     ItemDeTitulo,
     Resultado,
     Resumo,
+    SituacaoNoErp,
     TipoDeDecisao,
     Titulo,
     TituloACancelar,
     TituloNaCobranca,
+    TituloNoAcompanhamento,
 )
 from conciliacao.normalizacao import formatar_reais
 
@@ -31,6 +33,8 @@ COLUNA_DO_MOTIVO_DA_REJEICAO = "Motivo da rejeição"
 COLUNA_DOS_TITULOS_ESCOLHIDOS = "Títulos escolhidos"
 COLUNA_DO_FRANQUEADO_DO_CONCILIADO_FORA = "Franqueado do Conciliado fora (CNPJ)"
 COLUNA_DA_REFERENCIA_DO_CONCILIADO_FORA = "Referência do Conciliado fora"
+ABA_DE_REVERSAO = "Reverter confirmação"
+COLUNA_DO_MOTIVO_DA_REVERSAO = "Motivo da reversão"
 _COLUNAS_DE_DECISAO_DA_FILA = (
     COLUNA_DA_DECISAO,
     COLUNA_DOS_TITULOS_ESCOLHIDOS,
@@ -56,6 +60,9 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     )
     _aba_de_baixa_manual(workbook.create_sheet("Baixa manual no ERP"), resultado.baixa_manual)
     _aba_de_cancelar_na_origem(workbook.create_sheet("Cancelar na origem"), resultado.cancelar_na_origem)
+    _aba_de_acompanhamento_do_erp(workbook.create_sheet("Acompanhamento do ERP"), resultado.acompanhamento_do_erp)
+    reversao = workbook.create_sheet(ABA_DE_REVERSAO)
+    reversao.append((COLUNA_DO_ITEM, COLUNA_DO_MOTIVO_DA_REVERSAO))
     fila = workbook.create_sheet(ABA_DA_FILA_DE_EXCECOES)
     _aba_de_itens(
         fila,
@@ -112,7 +119,8 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
         (
             "Decisões lidas do Excel",
             f"{decisoes.confirmadas} confirmada(s), {decisoes.rejeitadas} rejeitada(s), "
-            f"{len(decisoes.nao_aplicadas)} não aplicada(s)",
+            + (f"{decisoes.revertidas} revertida(s), " if decisoes.revertidas else "")
+            + f"{len(decisoes.nao_aplicadas)} não aplicada(s)",
         )
     )
     aba.append(
@@ -131,11 +139,20 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
         )
     )
     aba.append(("Títulos a cancelar na origem", len(resultado.cancelar_na_origem)))
+    for situacao, rotulo in _ROTULOS_DO_ACOMPANHAMENTO.items():
+        aba.append((rotulo, sum(1 for t in resultado.acompanhamento_do_erp if t.situacao is situacao)))
     for aviso in decisoes.nao_aplicadas:
         aba.append(("Decisão não aplicada", aviso))
     aba.column_dimensions["A"].width = 32
     aba.column_dimensions["B"].width = 60
 
+
+_ROTULOS_DO_ACOMPANHAMENTO = {
+    SituacaoNoErp.AGUARDANDO_BAIXA_NO_ERP: "Aguardando baixa no ERP",
+    SituacaoNoErp.BAIXADO_POR_FORA: "Baixados por fora",
+    SituacaoNoErp.DIVERGENCIA_DE_BAIXA: "Divergências de baixa",
+    SituacaoNoErp.ESTORNO_NECESSARIO_NO_ERP: "Estorno necessário no ERP",
+}
 
 _SEM_DATA_DE_REFERENCIA = "sem Data de referência: há conta configurada sem Extrato; nenhum Título vai para cobrança"
 
@@ -252,6 +269,43 @@ def _aba_de_cancelar_na_origem(aba: Worksheet, titulos: tuple[TituloACancelar, .
         )
         aba.cell(row=aba.max_row, column=5).number_format = _FORMATO_DE_DATA
         aba.cell(row=aba.max_row, column=6).number_format = _FORMATO_DE_VALOR
+    aba.freeze_panes = "A2"
+
+
+def _aba_de_acompanhamento_do_erp(aba: Worksheet, titulos: tuple[TituloNoAcompanhamento, ...]) -> None:
+    aba.append(
+        (
+            "Situação",
+            "Título",
+            "Sistema de origem",
+            "Franqueado",
+            "CNPJ",
+            "Vencimento",
+            "Valor",
+            "Saldo",
+            COLUNA_DO_ITEM,
+            "Explicação",
+        )
+    )
+    for acompanhado in titulos:
+        titulo = acompanhado.titulo
+        aba.append(
+            (
+                acompanhado.situacao.value,
+                titulo.documento,
+                titulo.sistema_de_origem,
+                titulo.cliente,
+                titulo.cnpj,
+                titulo.vencimento,
+                Decimal(titulo.valor_centavos) / 100,
+                None if acompanhado.saldo_centavos is None else Decimal(acompanhado.saldo_centavos) / 100,
+                acompanhado.item,
+                acompanhado.explicacao,
+            )
+        )
+        aba.cell(row=aba.max_row, column=6).number_format = _FORMATO_DE_DATA
+        for coluna in (7, 8):
+            aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_VALOR
     aba.freeze_panes = "A2"
 
 
