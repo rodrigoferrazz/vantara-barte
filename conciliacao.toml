@@ -22,3 +22,8 @@ limite_de_combinacoes = 100000
 endereco = "http://localhost:11434"
 modelo = "qwen2.5:3b"
 tempo_limite_segundos = 120
+
+# Alerta do Resumo: avisa quando a parte resolvida sozinha (em quantidade ou em valor) cai mais que este número de
+# pontos percentuais em relação à execução anterior. O limiar de "queda grande" ainda não foi confirmado com o cliente.
+[resumo]
+limite_de_queda_pontos_percentuais = 10

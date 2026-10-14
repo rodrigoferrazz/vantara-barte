@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from datetime import date, datetime
+from fractions import Fraction
 
 _VALOR_PTBR = re.compile(r"\d{1,3}(\.\d{3})*,\d{2}")
 _VALOR_COM_PONTO = re.compile(r"\d+\.\d{2}")
@@ -50,6 +51,10 @@ def _data(texto: str, formato: str) -> date:
 def formatar_reais(centavos: int) -> str:
     reais, resto = divmod(centavos, 100)
     return f"R$ {reais:,}".replace(",", ".") + f",{resto:02d}"
+
+
+def formatar_percentual(percentual: Fraction, simbolo: bool = True) -> str:
+    return f"{float(percentual):.1f}".replace(".", ",") + ("%" if simbolo else "")
 
 
 def cnpj(texto: str) -> str:

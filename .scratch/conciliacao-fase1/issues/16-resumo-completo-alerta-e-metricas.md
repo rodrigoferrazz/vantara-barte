@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] Resumo mostra lidos, recusados, % resolvido sozinho, estado da IA, conta atrasada e conflitos
-- [ ] Queda do % automático acima do limite configurável gera aviso no Resumo
-- [ ] Relatório de taxa de rejeição por tipo de evidência
-- [ ] Relatório de acerto da primeira sugestão da IA
-- [ ] Nenhuma regra muda de comportamento por causa das métricas
+- [x] Resumo mostra lidos, recusados, % resolvido sozinho, estado da IA, conta atrasada e conflitos
+- [x] Queda do % automático acima do limite configurável gera aviso no Resumo
+- [x] Relatório de taxa de rejeição por tipo de evidência
+- [x] Relatório de acerto da primeira sugestão da IA
+- [x] Nenhuma regra muda de comportamento por causa das métricas
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

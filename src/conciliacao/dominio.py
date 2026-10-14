@@ -1,11 +1,12 @@
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from fractions import Fraction
 from typing import ClassVar
 
-from conciliacao.normalizacao import raiz_do_cnpj
+from conciliacao.normalizacao import formatar_percentual, raiz_do_cnpj
 
 
 class Destino(StrEnum):
@@ -298,6 +299,7 @@ class DecisoesLidas:
     conciliados_fora: int = 0
     duplicidades: int = 0
     revertidas: int = 0
+    conflitos: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -318,6 +320,32 @@ class ArquivoRecusado:
 class TotalDoDestino:
     quantidade: int
     valor_centavos: int
+
+
+@dataclass(frozen=True)
+class ParteAutomatica:
+    resolvidos: TotalDoDestino
+    creditos: TotalDoDestino
+
+    @classmethod
+    def dos_totais(cls, totais: Mapping[Destino, TotalDoDestino]) -> "ParteAutomatica":
+        lista, fila = totais[Destino.LISTA_DE_BAIXA], totais[Destino.FILA_DE_EXCECOES]
+        return cls(
+            resolvidos=lista,
+            creditos=TotalDoDestino(lista.quantidade + fila.quantidade, lista.valor_centavos + fila.valor_centavos),
+        )
+
+    @property
+    def percentual_da_quantidade(self) -> Fraction | None:
+        if not self.creditos.quantidade:
+            return None
+        return Fraction(100 * self.resolvidos.quantidade, self.creditos.quantidade)
+
+    @property
+    def percentual_do_valor(self) -> Fraction | None:
+        if not self.creditos.valor_centavos:
+            return None
+        return Fraction(100 * self.resolvidos.valor_centavos, self.creditos.valor_centavos)
 
 
 @dataclass(frozen=True)
@@ -409,6 +437,40 @@ class Resumo:
     itens_ia_indisponivel: int
     data_de_referencia: DataDeReferencia
     decisoes: DecisoesLidas
+    limite_de_queda: Decimal | None
+    execucao_anterior: int | None = None
+    parte_automatica_anterior: ParteAutomatica | None = None
+
+    @property
+    def parte_automatica(self) -> ParteAutomatica:
+        return ParteAutomatica.dos_totais(self.totais)
+
+    @property
+    def alerta_de_queda(self) -> str | None:
+        anterior, atual = self.parte_automatica_anterior, self.parte_automatica
+        if anterior is None or self.limite_de_queda is None:
+            return None
+        limite = Fraction(self.limite_de_queda)
+        quedas = [
+            f"{medida} de {formatar_percentual(antes)} para {formatar_percentual(agora)} "
+            f"(queda de {formatar_percentual(antes - agora, simbolo=False)})"
+            for medida, antes, agora in (
+                ("em quantidade", anterior.percentual_da_quantidade, atual.percentual_da_quantidade),
+                ("em valor", anterior.percentual_do_valor, atual.percentual_do_valor),
+            )
+            if antes is not None and agora is not None and antes - agora > limite
+        ]
+        if not quedas:
+            return None
+        return (
+            f"ATENÇÃO: a parte resolvida sozinha caiu além do limite de {formatar_limite(self.limite_de_queda)} "
+            f"pontos percentuais em relação à execução {self.execucao_anterior}: {'; '.join(quedas)}. "
+            "Verifique se alguma exportação veio quebrada."
+        )
+
+
+def formatar_limite(limite: Decimal) -> str:
+    return f"{limite:f}".replace(".", ",")
 
 
 @dataclass(frozen=True)
@@ -457,6 +519,112 @@ class CausaRaiz:
         return Fraction(grupo.valor_centavos, self.valor_centavos) if self.valor_centavos else None
 
 
+@dataclass(frozen=True)
+class RejeicaoDasPropostas:
+    nome: str
+    confirmadas: int
+    rejeitadas: int
+    revertidas: int
+
+    @property
+    def taxa_de_rejeicao(self) -> Fraction | None:
+        decididas = self.confirmadas + self.rejeitadas
+        return Fraction(self.rejeitadas, decididas) if decididas else None
+
+
+@dataclass(frozen=True)
+class AcertoDaIa:
+    modelo: str
+    versao_do_prompt: str
+    avaliados: int
+    acertos: int
+    aguardando_decisao: int
+
+    @property
+    def taxa_de_acerto(self) -> Fraction | None:
+        return Fraction(self.acertos, self.avaliados) if self.avaliados else None
+
+
+@dataclass(frozen=True)
+class DecisaoSobreProposta:
+    tipo: TipoDeDecisao
+    regra: RegraDaProposta
+    evidencia: tuple[TipoDeEvidencia, ...]
+    revertida: bool
+
+
+@dataclass(frozen=True)
+class PrimeiraSugestaoDaIa:
+    pareceres: tuple[ParecerSobreFranqueado, ...]
+    franqueados_decididos: frozenset[str] | None
+
+
+@dataclass(frozen=True)
+class Metricas:
+    por_evidencia: tuple[RejeicaoDasPropostas, ...] = ()
+    por_regra: tuple[RejeicaoDasPropostas, ...] = ()
+    acerto_da_ia: tuple[AcertoDaIa, ...] = ()
+
+    @classmethod
+    def calcular(
+        cls, propostas: Iterable[DecisaoSobreProposta], sugestoes: Iterable[PrimeiraSugestaoDaIa]
+    ) -> "Metricas":
+        decididas = list(propostas)
+        return cls(
+            por_evidencia=_rejeicao(
+                decididas, [e.value for e in TipoDeEvidencia], lambda d: [e.value for e in d.evidencia]
+            ),
+            por_regra=_rejeicao(decididas, [r.value for r in RegraDaProposta], lambda d: [d.regra.value]),
+            acerto_da_ia=_acerto_da_ia(sugestoes),
+        )
+
+
+def _rejeicao(
+    decididas: list[DecisaoSobreProposta],
+    ordem: list[str],
+    grupos_da_decisao: Callable[[DecisaoSobreProposta], list[str]],
+) -> tuple[RejeicaoDasPropostas, ...]:
+    por_grupo: dict[str, list[DecisaoSobreProposta]] = {}
+    for decisao in decididas:
+        for grupo in grupos_da_decisao(decisao):
+            por_grupo.setdefault(grupo, []).append(decisao)
+    return tuple(
+        RejeicaoDasPropostas(
+            nome=grupo,
+            confirmadas=sum(1 for d in do_grupo if d.tipo is TipoDeDecisao.CONFIRMAR),
+            rejeitadas=sum(1 for d in do_grupo if d.tipo is TipoDeDecisao.REJEITAR),
+            revertidas=sum(1 for d in do_grupo if d.revertida),
+        )
+        for grupo in ordem
+        if (do_grupo := por_grupo.get(grupo))
+    )
+
+
+def _acerto_da_ia(sugestoes: Iterable[PrimeiraSugestaoDaIa]) -> tuple[AcertoDaIa, ...]:
+    por_versao: dict[tuple[str, str], list[PrimeiraSugestaoDaIa]] = {}
+    for sugestao in sugestoes:
+        parecer = sugestao.pareceres[0].parecer
+        por_versao.setdefault((parecer.modelo, parecer.versao_do_prompt), []).append(sugestao)
+    resultado = []
+    for (modelo, versao), da_versao in sorted(por_versao.items()):
+        avaliaveis = [s for s in da_versao if s.franqueados_decididos is not None and len(s.franqueados_decididos) == 1]
+        resultado.append(
+            AcertoDaIa(
+                modelo=modelo,
+                versao_do_prompt=versao,
+                avaliados=len(avaliaveis),
+                acertos=sum(1 for s in avaliaveis if _acertou(s)),
+                aguardando_decisao=sum(1 for s in da_versao if s.franqueados_decididos is None),
+            )
+        )
+    return tuple(resultado)
+
+
+def _acertou(sugestao: PrimeiraSugestaoDaIa) -> bool:
+    decididos = sugestao.franqueados_decididos or frozenset()
+    return all((p.parecer.resposta is Resposta.SIM) == (p.franqueado in decididos) for p in sugestao.pareceres)
+
+
 def _agrupar(
     itens: list[Item], grupo_do_item: Callable[[Item], str], grupos_fixos: Iterable[str] = ()
 ) -> tuple[GrupoDaCausaRaiz, ...]:
@@ -484,6 +652,7 @@ class Resultado:
     cancelar_na_origem: tuple[TituloACancelar, ...] = ()
     conciliados_fora: tuple[Item, ...] = ()
     acompanhamento_do_erp: tuple[TituloNoAcompanhamento, ...] = ()
+    metricas: Metricas = Metricas()
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]

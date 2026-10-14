@@ -469,3 +469,39 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** aba "Acompanhamento do ERP", logo depois de Cancelar na origem e antes de Reverter confirmação, com Situação, Título, Sistema de origem, Franqueado, CNPJ, Vencimento, Valor, Saldo, Item e Explicação. Aguardando baixa no ERP e Estorno necessário no ERP aparecem em toda execução enquanto valem; Baixado por fora e Divergência de baixa só na execução que os detectou (ficam guardados). O Resumo ganha uma linha com a quantidade de cada situação. A Baixa manual no ERP deixa de listar Título que já não está na exportação do seu Sistema. O teste do comando que lista exatamente as abas passou a incluir as duas abas novas.
 - **Por quê:** Título confirmado que some sai de todas as saídas (história 68); um evento já registrado repetido todo dia esconderia os novos.
 - **Alternativas:** abas separadas por situação; repetir Baixados por fora em todas as execuções.
+
+## Ticket 16: o que é "resolvido sozinho"
+
+- **Decisão:** a parte resolvida sozinha é a fração dos Créditos classificados na execução (Lista de baixa + Fila de exceções, os vivos de todas as importações) que foi para a Lista de baixa, em quantidade e em valor. Fora do escopo não entra na base. Sem Crédito na execução, o Resumo diz "nenhum Crédito para conciliar nesta execução" em vez de um percentual. É derivada dos itens guardados, sem coluna nova.
+- **Por quê:** débitos não são conciliados, e incluí-los inflaria a parte automática; usar o mesmo conjunto dos totais por destino mantém o Resumo coerente consigo mesmo e com a conferência de soma.
+- **Alternativas:** só os Créditos novos da execução (rodar de novo os mesmos arquivos daria "sem Crédito" e esconderia a comparação); incluir Fora do escopo na base.
+
+## Ticket 16: alerta de queda da parte automática
+
+- **Decisão:** compara com a execução imediatamente anterior, em pontos percentuais, separadamente em quantidade e em valor; alerta se qualquer uma das duas cai estritamente mais que o limite. O limite fica em `[resumo] limite_de_queda_pontos_percentuais` (número de 0 a 100, campo desconhecido recusado), padrão 10, e é guardado com cada execução (tabela `limites_de_queda`) para que o Resumo seja relido do armazenamento sem depender da configuração atual. Execução anterior sem Crédito não é comparada; execução guardada antes deste ticket fica sem alerta. O Resumo sempre tem a linha "Alerta de queda da parte automática", com o alerta ou com os percentuais da anterior.
+- **Por quê:** a spec deixa o limiar configurável e em aberto com o cliente; queda em valor sem queda em quantidade (poucos Créditos grandes) também indica exportação quebrada, então alertar por qualquer uma é o lado conservador. Pontos percentuais são o que a Analista lê no Resumo.
+- **Alternativas:** queda relativa (percentual do percentual); média das últimas execuções; só quantidade; sem valor padrão (a seção passaria a ser obrigatória).
+
+## Ticket 16: conflitos no Resumo
+
+- **Decisão:** o Resumo ganha "Conflitos entre Excel e tela" (contagem) e uma linha "Conflito" por conflito, lidas de `DecisoesLidas.conflitos`. Hoje só há a origem Excel, então a contagem é sempre 0; o ticket 15 (tela) preenche os conflitos.
+- **Por quê:** o ticket pede o Resumo completo e o ticket 15 depende deste; zero é o valor verdadeiro enquanto não existe a segunda origem.
+- **Alternativas:** deixar a linha para o ticket 15; criar já a tabela de conflitos sem nada que escreva nela.
+
+## Ticket 16: relatório de métricas
+
+- **Decisão:** aba "Métricas", logo depois de Causa raiz, com três blocos: taxa de rejeição por tipo de evidência, taxa de rejeição por regra e acerto da primeira sugestão da IA por modelo e versão do prompt. As métricas são acumuladas de todas as decisões aplicadas até a execução, calculadas ao carregar o resultado, e nada no motor as lê. O teste do comando que lista exatamente as abas passou a incluir "Métricas".
+- **Por quê:** o resultado guardado é a única origem das saídas e a causa raiz já é um relatório no workbook; o motor não recebe as métricas, então nenhuma regra muda por causa delas (história 77).
+- **Alternativas:** comando ou arquivo separado; aba no fim, depois de Arquivos recusados.
+
+## Ticket 16: taxa de rejeição
+
+- **Decisão:** conta só decisões "confirmar" e "rejeitar" sobre propostas da Lista de baixa (as que têm regra). Taxa = rejeitadas / (confirmadas + rejeitadas), por cada tipo de evidência da proposta e por regra. Confirmações revertidas depois aparecem numa coluna à parte e continuam contando como confirmadas.
+- **Por quê:** só a Lista é rejeitada; a Fila exige decisão ativa e não tem proposta. A reversão pode ter motivo que não é erro da regra (ticket 14), então misturá-la à taxa a distorceria; mostrá-la à parte deixa a leitura para o desenvolvedor.
+- **Alternativas:** contar a reversão como rejeição; incluir confirmações da Fila.
+
+## Ticket 16: acerto da primeira sugestão da IA
+
+- **Decisão:** a primeira sugestão de um Crédito é o conjunto de pareceres do primeiro item dele em que todos os candidatos tiveram parecer (execuções com "IA indisponível" são puladas). A verdade é o Franqueado da decisão em vigor da Analista: os Títulos confirmados (pela raiz do CNPJ) ou o Franqueado do Conciliado fora. A sugestão acerta quando cada resposta bate: sim para o Franqueado decidido e não para os outros candidatos (inclusive "não" para todos quando a Analista escolheu um Franqueado que não era candidato). Crédito com parecer e sem decisão conta como "aguardando decisão"; confirmação com Títulos de mais de um Franqueado não é avaliada. Agrupado por modelo e versão do prompt.
+- **Por quê:** "primeira" isola o que a IA disse antes de qualquer correção; o "não" também é sugestão (mantém a sugestão por valor sem nome), então errar para "não" precisa contar como erro.
+- **Alternativas:** usar o parecer copiado na decisão (é o último, não o primeiro); avaliar só os pareceres "sim".

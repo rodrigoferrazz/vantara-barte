@@ -52,6 +52,7 @@ def test_comando_gera_workbook_com_resumo_no_topo_e_as_quatro_abas(tmp_path: Pat
         "Fila de exceções",
         "Lista de cobrança",
         "Causa raiz",
+        "Métricas",
         "Fora do escopo",
         "Arquivos recusados",
     ]

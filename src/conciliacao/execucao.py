@@ -112,6 +112,7 @@ def executar_conciliacao(
             ],
             decisoes_aplicadas=decisoes.registradas,
             avisos_das_decisoes=decisoes.lidas.nao_aplicadas,
+            limite_de_queda=configuracao.limite_de_queda,
             decisoes_de_duplicidade_aplicadas=decisoes.duplicidades,
             sistemas_exportados=leitura.sistemas_exportados,
             acompanhamento_do_erp=acompanhamento.situacoes,

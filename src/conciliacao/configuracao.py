@@ -30,6 +30,7 @@ class Configuracao:
     encargo: ParametrosDeEncargo = ParametrosDeEncargo()
     limite_de_combinacoes: int = 100_000
     ia: ConfiguracaoDaIa | None = None
+    limite_de_queda: Decimal = Decimal("10")
 
 
 def carregar_configuracao(caminho: Path) -> Configuracao:
@@ -46,7 +47,23 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
         encargo=_encargo(caminho, dados.get("encargo", {})),
         limite_de_combinacoes=_limite_de_combinacoes(caminho, dados.get("somas", {})),
         ia=_ia(caminho, dados["ia"]) if "ia" in dados else None,
+        limite_de_queda=_limite_de_queda(caminho, dados.get("resumo", {})),
     )
+
+
+def _limite_de_queda(caminho: Path, resumo: object) -> Decimal:
+    if not isinstance(resumo, dict):
+        raise ConfiguracaoInvalida(f"{caminho}: [resumo] precisa ser uma seção")
+    campo = "limite_de_queda_pontos_percentuais"
+    desconhecidos = sorted(set(resumo) - {campo})
+    if desconhecidos:
+        raise ConfiguracaoInvalida(f"{caminho}: [resumo] não conhece {', '.join(desconhecidos)}; use {campo}")
+    limite = resumo.get(campo)
+    if limite is None:
+        return Configuracao.limite_de_queda
+    if isinstance(limite, bool) or not isinstance(limite, int | float) or not 0 <= limite <= 100:
+        raise ConfiguracaoInvalida(f"{caminho}: [resumo] {campo} precisa ser um número entre 0 e 100")
+    return Decimal(str(limite))
 
 
 _CAMPOS_DA_IA = ("endereco", "modelo", "tempo_limite_segundos")

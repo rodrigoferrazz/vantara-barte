@@ -4,6 +4,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from conciliacao.dominio import (
@@ -15,7 +16,11 @@ from conciliacao.dominio import (
     TituloNoAcompanhamento,
     BaixaManual,
     DecisaoRegistrada,
+    DecisaoSobreProposta,
     DecisoesLidas,
+    Metricas,
+    ParteAutomatica,
+    PrimeiraSugestaoDaIa,
     ParRejeitado,
     RegraDaProposta,
     TipoDeDecisao,
@@ -226,6 +231,10 @@ CREATE TABLE IF NOT EXISTS acompanhamento_do_erp (
     item TEXT,
     explicacao TEXT NOT NULL,
     saldo_centavos INTEGER
+);
+CREATE TABLE IF NOT EXISTS limites_de_queda (
+    execucao_id INTEGER NOT NULL UNIQUE REFERENCES execucoes(id),
+    pontos_percentuais TEXT NOT NULL
 );
 """
 
@@ -617,12 +626,7 @@ class Armazenamento:
                 origem=origem,
                 execucao=execucao,
                 titulos=self._titulos_ligados("decisoes_titulos", decisao, coluna="decisao_id"),
-                evidencia=tuple(
-                    TipoDeEvidencia(t)
-                    for (t,) in self._conexao.execute(
-                        "SELECT tipo FROM decisoes_evidencias WHERE decisao_id = ? ORDER BY rowid", (decisao,)
-                    )
-                ),
+                evidencia=self._evidencia_da_decisao(decisao),
                 explicacao=explicacao,
                 regra=RegraDaProposta(regra) if regra else None,
                 pareceres=self._pareceres("decisoes_pareceres", "decisao_id", decisao),
@@ -693,6 +697,7 @@ class Armazenamento:
         cobranca: Iterable[tuple[TituloNaCobranca, tuple[int, ...]]],
         decisoes_aplicadas: Iterable[int],
         avisos_das_decisoes: Iterable[str],
+        limite_de_queda: Decimal,
         decisoes_de_duplicidade_aplicadas: Iterable[int] = (),
         sistemas_exportados: Iterable[str] = (),
         acompanhamento_do_erp: Iterable[TituloNoAcompanhamento] = (),
@@ -703,6 +708,10 @@ class Armazenamento:
         )
         execucao = cursor.lastrowid
         assert execucao is not None
+        self._conexao.execute(
+            "INSERT INTO limites_de_queda (execucao_id, pontos_percentuais) VALUES (?, ?)",
+            (execucao, str(limite_de_queda)),
+        )
         self._conexao.executemany(
             "INSERT INTO arquivos (execucao_id, nome, motivo_da_recusa) VALUES (?, ?, ?)",
             [(execucao, nome, None) for nome in arquivos_lidos]
@@ -838,31 +847,34 @@ class Armazenamento:
         return cursor.lastrowid
 
     def carregar_resultado(self, execucao: int) -> Resultado:
-        (lancamentos_novos,) = self._conexao.execute(
-            "SELECT lancamentos_novos FROM execucoes WHERE id = ?", (execucao,)
+        lancamentos_novos, pontos_percentuais = self._conexao.execute(
+            "SELECT e.lancamentos_novos, q.pontos_percentuais FROM execucoes e"
+            " LEFT JOIN limites_de_queda q ON q.execucao_id = e.id WHERE e.id = ?",
+            (execucao,),
         ).fetchone()
         arquivos = self._conexao.execute(
             "SELECT nome, motivo_da_recusa FROM arquivos WHERE execucao_id = ? ORDER BY nome", (execucao,)
         ).fetchall()
         itens = tuple(self._itens("i.execucao_id = ?", (execucao,)))
         conciliados_fora = tuple(self._conciliados_fora(execucao))
-        totais = {
-            destino: TotalDoDestino(
-                quantidade=sum(1 for item in itens if item.destino is destino),
-                valor_centavos=sum(item.lancamento.valor_centavos for item in itens if item.destino is destino),
-            )
-            for destino in Destino
-        }
+        anterior = self._execucao_anterior(execucao)
         resumo = Resumo(
             execucao=execucao,
             arquivos_lidos=tuple(nome for nome, motivo in arquivos if motivo is None),
             arquivos_recusados=tuple(ArquivoRecusado(nome, motivo) for nome, motivo in arquivos if motivo is not None),
             lancamentos_novos=lancamentos_novos,
-            totais=totais,
+            totais=_totais(itens),
             itens_com_parecer=sum(1 for item in itens if item.pareceres and not item.ia_indisponivel),
             itens_ia_indisponivel=sum(1 for item in itens if item.ia_indisponivel),
             data_de_referencia=self._data_de_referencia(execucao),
             decisoes=self._decisoes_lidas(execucao),
+            limite_de_queda=Decimal(pontos_percentuais) if pontos_percentuais is not None else None,
+            execucao_anterior=anterior,
+            parte_automatica_anterior=(
+                ParteAutomatica.dos_totais(_totais(self._itens("i.execucao_id = ?", (anterior,))))
+                if anterior is not None
+                else None
+            ),
         )
         return Resultado(
             resumo=resumo,
@@ -877,6 +889,65 @@ class Armazenamento:
             cancelar_na_origem=tuple(self._cancelar_na_origem(execucao)),
             conciliados_fora=conciliados_fora,
             acompanhamento_do_erp=tuple(self._acompanhamento_do_erp(execucao)),
+            metricas=Metricas.calcular(self._propostas_decididas(execucao), self._primeiras_sugestoes_da_ia(execucao)),
+        )
+
+    def _execucao_anterior(self, execucao: int) -> int | None:
+        (anterior,) = self._conexao.execute("SELECT MAX(id) FROM execucoes WHERE id < ?", (execucao,)).fetchone()
+        return int(anterior) if anterior is not None else None
+
+    def _propostas_decididas(self, execucao: int) -> Iterator[DecisaoSobreProposta]:
+        linhas = self._conexao.execute(
+            "SELECT d.id, d.tipo, d.regra, EXISTS (SELECT 1 FROM reversoes r JOIN decisoes v ON v.id = r.reversao_id"
+            " WHERE r.confirmacao_id = d.id AND v.execucao_que_aplicou <= ?) FROM decisoes d"
+            " WHERE d.regra IS NOT NULL AND d.tipo IN (?, ?) AND d.execucao_que_aplicou <= ? ORDER BY d.id",
+            (execucao, TipoDeDecisao.CONFIRMAR.value, TipoDeDecisao.REJEITAR.value, execucao),
+        ).fetchall()
+        for decisao, tipo, regra, revertida in linhas:
+            yield DecisaoSobreProposta(
+                tipo=TipoDeDecisao(tipo),
+                regra=RegraDaProposta(regra),
+                evidencia=self._evidencia_da_decisao(decisao),
+                revertida=bool(revertida),
+            )
+
+    def _primeiras_sugestoes_da_ia(self, execucao: int) -> Iterator[PrimeiraSugestaoDaIa]:
+        primeiros: dict[int, int] = {}
+        for lancamento_id, item_id in self._conexao.execute(
+            "SELECT i.lancamento_id, i.id FROM itens i WHERE i.execucao_id <= ?"
+            " AND EXISTS (SELECT 1 FROM itens_pareceres p WHERE p.item_id = i.id)"
+            " AND NOT EXISTS (SELECT 1 FROM itens_pareceres p WHERE p.item_id = i.id AND p.resposta = ?)"
+            " ORDER BY i.execucao_id, i.id",
+            (execucao, Resposta.INDISPONIVEL.value),
+        ):
+            primeiros.setdefault(lancamento_id, item_id)
+        for lancamento_id, item_id in primeiros.items():
+            yield PrimeiraSugestaoDaIa(
+                pareceres=self._pareceres("itens_pareceres", "item_id", item_id),
+                franqueados_decididos=self._franqueados_decididos(lancamento_id, execucao),
+            )
+
+    def _franqueados_decididos(self, lancamento_id: int, execucao: int) -> frozenset[str] | None:
+        linha = self._conexao.execute(
+            "SELECT d.id, f.franqueado FROM decisoes d LEFT JOIN decisoes_conciliado_fora f ON f.decisao_id = d.id"
+            " WHERE d.lancamento_id = ? AND d.tipo IN (?, ?) AND d.execucao_que_aplicou <= ?"
+            " AND NOT EXISTS (SELECT 1 FROM reversoes r JOIN decisoes v ON v.id = r.reversao_id"
+            " WHERE r.confirmacao_id = d.id AND v.execucao_que_aplicou <= ?) ORDER BY d.id DESC LIMIT 1",
+            (lancamento_id, TipoDeDecisao.CONFIRMAR.value, TipoDeDecisao.CONCILIADO_FORA.value, execucao, execucao),
+        ).fetchone()
+        if linha is None:
+            return None
+        decisao, franqueado = linha
+        if franqueado is not None:
+            return frozenset({franqueado})
+        return frozenset(t.franqueado for t in self._titulos_ligados("decisoes_titulos", decisao, coluna="decisao_id"))
+
+    def _evidencia_da_decisao(self, decisao: int) -> tuple[TipoDeEvidencia, ...]:
+        return tuple(
+            TipoDeEvidencia(t)
+            for (t,) in self._conexao.execute(
+                "SELECT tipo FROM decisoes_evidencias WHERE decisao_id = ? ORDER BY rowid", (decisao,)
+            )
         )
 
     def _acompanhamento_do_erp(self, execucao: int) -> Iterator[TituloNoAcompanhamento]:
@@ -1068,6 +1139,17 @@ def _titulo(linha: tuple[str, str, str, str, str | None, str, int]) -> Titulo:
 
 
 _PREFIXO_DO_ITEM = "L"
+
+
+def _totais(itens: Iterable[Item]) -> dict[Destino, TotalDoDestino]:
+    por_destino = list(itens)
+    return {
+        destino: TotalDoDestino(
+            quantidade=sum(1 for item in por_destino if item.destino is destino),
+            valor_centavos=sum(item.lancamento.valor_centavos for item in por_destino if item.destino is destino),
+        )
+        for destino in Destino
+    }
 
 
 def _identificador_do_item(lancamento_id: int) -> str:

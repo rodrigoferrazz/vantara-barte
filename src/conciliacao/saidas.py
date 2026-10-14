@@ -1,4 +1,5 @@
 from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -13,6 +14,8 @@ from conciliacao.dominio import (
     GrupoDaCausaRaiz,
     Item,
     ItemDeTitulo,
+    Metricas,
+    ParteAutomatica,
     Resultado,
     Resumo,
     SituacaoNoErp,
@@ -21,8 +24,9 @@ from conciliacao.dominio import (
     TituloACancelar,
     TituloNaCobranca,
     TituloNoAcompanhamento,
+    formatar_limite,
 )
-from conciliacao.normalizacao import formatar_reais
+from conciliacao.normalizacao import formatar_percentual, formatar_reais
 
 ABA_DA_LISTA_DE_BAIXA = Destino.LISTA_DE_BAIXA.value
 ABA_DA_FILA_DE_EXCECOES = Destino.FILA_DE_EXCECOES.value
@@ -80,6 +84,7 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
     _acrescentar_itens_de_titulo(fila, resultado.itens_de_titulo)
     _aba_de_cobranca(workbook.create_sheet("Lista de cobrança"), resultado)
     _aba_de_causa_raiz(workbook.create_sheet("Causa raiz"), resultado.causa_raiz)
+    _aba_de_metricas(workbook.create_sheet("Métricas"), resultado.metricas)
     _aba_de_itens(workbook.create_sheet(Destino.FORA_DO_ESCOPO.value), resultado.fora_do_escopo, ("Explicação",))
     _aba_de_arquivos_recusados(workbook.create_sheet("Arquivos recusados"), resultado.arquivos_recusados)
     workbook.save(caminho)
@@ -97,6 +102,8 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
     aba.append(("Lançamentos novos no Extrato", resumo.lancamentos_novos))
     for destino, total in resumo.totais.items():
         aba.append((destino.value, f"{total.quantidade} lançamento(s), {formatar_reais(total.valor_centavos)}"))
+    aba.append(("Resolvido sozinho", _resolvido_sozinho(resumo.parte_automatica)))
+    aba.append(("Alerta de queda da parte automática", _alerta_de_queda(resumo)))
     aba.append(("Itens de Título na Fila", len(resultado.itens_de_titulo)))
     referencia = resumo.data_de_referencia
     aba.append(("Data de referência", f"{referencia.data:%d/%m/%Y}" if referencia.data else _SEM_DATA_DE_REFERENCIA))
@@ -123,6 +130,7 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
             + f"{len(decisoes.nao_aplicadas)} não aplicada(s)",
         )
     )
+    aba.append(("Conflitos entre Excel e tela", len(decisoes.conflitos)))
     aba.append(
         (
             "Fila resolvida pelo Excel",
@@ -143,6 +151,8 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
         aba.append((rotulo, sum(1 for t in resultado.acompanhamento_do_erp if t.situacao is situacao)))
     for aviso in decisoes.nao_aplicadas:
         aba.append(("Decisão não aplicada", aviso))
+    for conflito in decisoes.conflitos:
+        aba.append(("Conflito", conflito))
     aba.column_dimensions["A"].width = 32
     aba.column_dimensions["B"].width = 60
 
@@ -155,6 +165,33 @@ _ROTULOS_DO_ACOMPANHAMENTO = {
 }
 
 _SEM_DATA_DE_REFERENCIA = "sem Data de referência: há conta configurada sem Extrato; nenhum Título vai para cobrança"
+
+
+def _resolvido_sozinho(parte: ParteAutomatica) -> str:
+    quantidade, valor = parte.percentual_da_quantidade, parte.percentual_do_valor
+    if quantidade is None or valor is None:
+        return "nenhum Crédito para conciliar nesta execução"
+    return (
+        f"{parte.resolvidos.quantidade} de {parte.creditos.quantidade} Crédito(s) ({formatar_percentual(quantidade)}); "
+        f"{formatar_reais(parte.resolvidos.valor_centavos)} de {formatar_reais(parte.creditos.valor_centavos)} "
+        f"({formatar_percentual(valor)})"
+    )
+
+
+def _alerta_de_queda(resumo: Resumo) -> str:
+    anterior = resumo.parte_automatica_anterior
+    if anterior is None or resumo.limite_de_queda is None:
+        return "sem execução anterior para comparar"
+    if resumo.alerta_de_queda is not None:
+        return resumo.alerta_de_queda
+    quantidade, valor = anterior.percentual_da_quantidade, anterior.percentual_do_valor
+    if quantidade is None or valor is None:
+        return f"sem alerta: na execução {resumo.execucao_anterior} não havia Crédito para conciliar"
+    return (
+        f"sem alerta: na execução {resumo.execucao_anterior} eram {formatar_percentual(quantidade)} em quantidade "
+        f"e {formatar_percentual(valor)} em valor; limite de queda de {formatar_limite(resumo.limite_de_queda)} "
+        "pontos percentuais"
+    )
 
 
 def _total_da_cobranca(titulos: tuple[TituloNaCobranca, ...]) -> str:
@@ -403,6 +440,38 @@ def _aba_de_causa_raiz(aba: Worksheet, causa_raiz: CausaRaiz) -> None:
             aba.cell(row=aba.max_row, column=4).number_format = _FORMATO_DE_VALOR
             aba.cell(row=aba.max_row, column=5).number_format = _FORMATO_DE_PERCENTUAL
     aba.column_dimensions["A"].width = 50
+
+
+def _aba_de_metricas(aba: Worksheet, metricas: Metricas) -> None:
+    for titulo, coluna, grupos in (
+        ("Taxa de rejeição por tipo de evidência", "Tipo de evidência", metricas.por_evidencia),
+        ("Taxa de rejeição por regra", "Regra", metricas.por_regra),
+    ):
+        aba.append((titulo,))
+        aba.append((coluna, "Confirmadas", "Rejeitadas", "Taxa de rejeição", "Revertidas depois de confirmadas"))
+        for grupo in grupos:
+            aba.append((grupo.nome, grupo.confirmadas, grupo.rejeitadas, _fracao(grupo.taxa_de_rejeicao), grupo.revertidas))
+            aba.cell(row=aba.max_row, column=4).number_format = _FORMATO_DE_PERCENTUAL
+        aba.append(())
+    aba.append(("Acerto da primeira sugestão da IA",))
+    aba.append(("Modelo", "Versão do prompt", "Avaliados", "Acertos", "Taxa de acerto", "Aguardando decisão"))
+    for acerto in metricas.acerto_da_ia:
+        aba.append(
+            (
+                acerto.modelo,
+                acerto.versao_do_prompt,
+                acerto.avaliados,
+                acerto.acertos,
+                _fracao(acerto.taxa_de_acerto),
+                acerto.aguardando_decisao,
+            )
+        )
+        aba.cell(row=aba.max_row, column=5).number_format = _FORMATO_DE_PERCENTUAL
+    aba.column_dimensions["A"].width = 48
+
+
+def _fracao(fracao: Fraction | None) -> float | None:
+    return float(fracao) if fracao is not None else None
 
 
 def _aba_de_arquivos_recusados(aba: Worksheet, recusados: tuple[ArquivoRecusado, ...]) -> None:
