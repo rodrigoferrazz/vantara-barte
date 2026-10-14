@@ -9,7 +9,7 @@ from conciliacao.armazenamento import Armazenamento
 from conciliacao.calendario import vencimento_efetivo
 from conciliacao.configuracao import Configuracao, ConfiguracaoInvalida, carregar_configuracao
 from conciliacao.dominio import OrigemDoIdentificador, TipoDeIdentificador, Titulo, VinculoDeCobranca
-from conciliacao.execucao import calcular_data_de_referencia
+from conciliacao.execucao import calcular_data_de_referencia, possiveis_duplicidades_nao_decididas
 from conciliacao.identificadores import gerar_txid
 from conciliacao.porta import CobrancaIdentificada, PortaDeCobranca, PortaSimulada
 
@@ -34,7 +34,7 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
         enviados = armazenamento.vinculos_enviados()
         gerados = armazenamento.identificadores_gerados(TipoDeIdentificador.TXID)
         a_enviar = []
-        for titulo in _titulos_em_aberto(armazenamento):
+        for titulo in _titulos_em_aberto_fora_de_duplicidade(armazenamento):
             if titulo.franqueado not in migracao.franqueados or vencimento_efetivo(titulo.vencimento) < referencia:
                 continue
             vinculo = vinculos.get(chave_do_titulo(titulo))
@@ -61,14 +61,16 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
     return Emissao(referencia, tuple(emitidas))
 
 
-def _titulos_em_aberto(armazenamento: Armazenamento) -> list[Titulo]:
+def _titulos_em_aberto_fora_de_duplicidade(armazenamento: Armazenamento) -> list[Titulo]:
     cancelados = armazenamento.titulos_cancelados_na_origem()
-    titulos = [t for t in armazenamento.ultima_fotografia() if chave_do_titulo(t) not in cancelados]
-    saldo = saldos(titulos, armazenamento.confirmacoes_em_vigor())
+    na_exportacao = [t for t in armazenamento.ultima_fotografia() if chave_do_titulo(t) not in cancelados]
+    duplicidades = possiveis_duplicidades_nao_decididas(armazenamento, na_exportacao)
+    em_duplicidade = {chave for duplicidade in duplicidades for chave in duplicidade.chave}
+    saldo = saldos(na_exportacao, armazenamento.confirmacoes_em_vigor())
     return [
         replace(t, valor_centavos=em_aberto)
-        for t in titulos
-        if (em_aberto := saldo[chave_do_titulo(t)]) > 0
+        for t in na_exportacao
+        if chave_do_titulo(t) not in em_duplicidade and (em_aberto := saldo[chave_do_titulo(t)]) > 0
     ]
 
 

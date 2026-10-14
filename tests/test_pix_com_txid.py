@@ -20,7 +20,15 @@ from conciliacao.emissao import emitir_cobrancas, main
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.porta import CobrancaIdentificada, PortaSimulada
 from conciliacao.saidas import gerar_workbook
-from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
+from tests.arquivos import (
+    LinhaItau,
+    TituloOmie,
+    TituloProtheus,
+    configuracao_itau,
+    escrever_extrato_itau,
+    escrever_omie,
+    escrever_protheus,
+)
 from tests.parecerista import PareceristaFalso
 
 MIGRADO = "10200300"
@@ -117,6 +125,34 @@ def test_emissao_so_considera_titulos_em_aberto_de_migrados_sem_cobranca_e_nao_v
 
     assert sorted(_txids(primeira)) == ["NF 1", "NF 2", "NF 5"]
     assert segunda.emitidas == []
+
+
+def test_emissao_deixa_de_fora_titulos_em_possivel_duplicidade_ate_a_analista_decidir(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    escrever_omie(pasta, [TituloOmie(documento="FAT-1", valor="800.00", vencimento="2025-03-10")])
+    primeira = _emitir(
+        pasta,
+        armazenamento,
+        [
+            TituloProtheus(documento="NF 1", valor="800,00", vencimento="10/03/2025"),
+            TituloProtheus(documento="NF 2", valor="500,00", vencimento="10/03/2025"),
+        ],
+    )
+    workbook = tmp_path / "conciliacao.xlsx"
+    gerar_workbook(_conciliar(pasta, armazenamento, _configuracao()), workbook)
+    planilha = load_workbook(workbook)
+    fila = planilha["Fila de exceções"]
+    cabecalho = [celula.value for celula in fila[1]]
+    fila.cell(row=2, column=cabecalho.index("Decisão") + 1, value="dívidas distintas")
+    planilha.properties.lastModifiedBy = "Ana Analista"
+    planilha.save(workbook)
+    executar_conciliacao(pasta, armazenamento, _configuracao(), PareceristaFalso(), workbook_anterior=workbook)
+    depois_da_decisao = PortaSimulada()
+    emitir_cobrancas(armazenamento, _configuracao(), depois_da_decisao)
+
+    assert sorted(_txids(primeira)) == ["NF 2"]
+    assert sorted(_txids(depois_da_decisao)) == ["FAT-1", "NF 1"]
 
 
 def test_emissao_desconta_do_valor_as_baixas_confirmadas_e_ignora_titulo_quitado(

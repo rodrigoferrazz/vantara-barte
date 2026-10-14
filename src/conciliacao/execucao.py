@@ -16,6 +16,7 @@ from conciliacao.dominio import (
     DataDeReferencia,
     Lancamento,
     Natureza,
+    PossivelDuplicidade,
     Resultado,
     RetornoDeCobranca,
     TipoDeDecisao,
@@ -85,8 +86,7 @@ def executar_conciliacao(
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
         data_de_referencia = calcular_data_de_referencia(armazenamento, configuracao)
-        decididas = armazenamento.duplicidades_decididas()
-        duplicidades = [d for d in possiveis_duplicidades(na_exportacao) if d.chave not in decididas]
+        duplicidades = possiveis_duplicidades_nao_decididas(armazenamento, na_exportacao)
         cobranca = [
             replace(na_cobranca, titulo=originais[chave_do_titulo(na_cobranca.titulo)])
             for na_cobranca in lista_de_cobranca(titulos, pelo_saldo, duplicidades, data_de_referencia.data)
@@ -122,6 +122,13 @@ def calcular_data_de_referencia(armazenamento: Armazenamento, configuracao: Conf
             for banco, conta in dict.fromkeys((c.banco, c.conta) for c in configuracao.contas)
         )
     )
+
+
+def possiveis_duplicidades_nao_decididas(
+    armazenamento: Armazenamento, na_exportacao: Iterable[Titulo]
+) -> list[PossivelDuplicidade]:
+    decididas = armazenamento.duplicidades_decididas()
+    return [d for d in possiveis_duplicidades(na_exportacao) if d.chave not in decididas]
 
 
 def _cobranca_identificada(
