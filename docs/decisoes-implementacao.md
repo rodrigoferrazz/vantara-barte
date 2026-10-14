@@ -721,6 +721,12 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** decisão do usuário. Emitir os dois Títulos de uma possível mesma dívida pode cobrar duas vezes o Franqueado; a Lista de cobrança da fase 1 já os deixa de fora pelo mesmo motivo (ver comentário no ticket 01 da fase 2).
 - **Alternativas:** emitir os dois, como a regra de emissão da spec dizia (cobrança em dobro); emitir só um deles (seria decidir pela Analista qual é o oficial).
 
+## Correção: Lista de cobrança exclui duplicidade por Sistema de origem e documento
+
+- **Decisão:** a Lista de cobrança deixa de fora os Títulos de Possível duplicidade não decidida comparando por Sistema de origem e documento, com o mesmo critério da emissão (`chaves_em_duplicidade`, usada pelas duas). Antes comparava o Título inteiro; como a Lista recebe os Títulos com o Saldo e as duplicidades são calculadas sobre a exportação, um Título em duplicidade com pagamento parcial confirmado voltava à cobrança.
+- **Por quê:** decisão do usuário. A regra do ticket 09 ("Títulos de uma Possível duplicidade não aparecem na Lista de cobrança") não depende do Saldo; o Título é identificado por Sistema de origem e documento em todo o resto da plataforma.
+- **Alternativas:** calcular as duplicidades sobre os Títulos com Saldo (um pagamento parcial desfaria a duplicidade, que é sobre o valor do ERP).
+
 ## Fase 2, ticket 02: identificador desconhecido segue a fase 1
 
 - **Decisão:** Crédito enriquecido com um Identificador de cobrança sem vínculo na plataforma segue exatamente o caminho da fase 1 (mesmo destino, Motivo, Títulos e evidência). A explicação ganha só uma frase final dizendo que o txid do Retorno não tem vínculo na plataforma. O motor não atribui "Possível fonte não integrada": esse Motivo continua sendo só classificação da Analista (correção "Possível fonte não integrada classificada pela Analista"), que pode usá-lo para esse Crédito pela Fila. O mesmo vale para o identificador que aponta Título fora dos em aberto: ele recebe "Crédito sem título em aberto" (seção seguinte), nunca "Possível fonte não integrada".

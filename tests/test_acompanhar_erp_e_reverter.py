@@ -13,7 +13,15 @@ from conciliacao.dominio import (
 )
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.saidas import gerar_workbook
-from tests.arquivos import LinhaItau, TituloProtheus, configuracao_itau, escrever_extrato_itau, escrever_protheus
+from tests.arquivos import (
+    LinhaItau,
+    TituloOmie,
+    TituloProtheus,
+    configuracao_itau,
+    escrever_extrato_itau,
+    escrever_omie,
+    escrever_protheus,
+)
 from tests.parecerista import PareceristaFalso
 
 CNPJ = "10.200.300/0001-40"
@@ -234,6 +242,25 @@ def test_pagamento_parcial_confirmado_deixa_o_titulo_em_aberto_e_na_cobranca_so_
     assert (aguardando.situacao, aguardando.saldo_centavos) == (SituacaoNoErp.AGUARDANDO_BAIXA_NO_ERP, 60000)
     cobranca = _linhas(load_workbook(workbook)["Lista de cobrança"])
     assert (cobranca[0]["Valor"], cobranca[0]["Saldo"]) == (1000, 600)
+
+
+def test_titulo_em_possivel_duplicidade_com_pagamento_parcial_confirmado_continua_fora_da_cobranca(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    workbook = tmp_path / "conciliacao.xlsx"
+    _protheus(pasta, TituloProtheus(documento="NF 140501", valor="1.000,00", cnpj=CNPJ))
+    escrever_omie(pasta, [TituloOmie(documento="FAT-14051", valor="1000.00")])
+    _extrato(pasta, LinhaItau("06/03/2025", f"TED RECEBIDA CNPJ {CNPJ}", "400,00"), TARIFA)
+    [item] = _executar(pasta, armazenamento, workbook).fila_de_excecoes
+    _resolver(workbook, {item.identificador: {"Decisão": "confirmar", "Títulos escolhidos": "NF 140501"}})
+
+    resultado = _executar(pasta, armazenamento, workbook)
+
+    [baixa] = resultado.baixa_manual
+    assert baixa.principal_centavos == 40000
+    [duplicidade] = resultado.itens_de_titulo
+    assert duplicidade.motivo is MotivoDeNaoIdentificacao.POSSIVEL_DUPLICIDADE
+    assert resultado.cobranca == ()
 
 
 def test_valor_igual_entre_exportacoes_tem_saldo_pelas_decisoes_e_casa_o_resto(

@@ -11,6 +11,7 @@ from conciliacao.configuracao import Configuracao, ConfiguracaoInvalida, carrega
 from conciliacao.dominio import OrigemDoIdentificador, TipoDeIdentificador, Titulo, VinculoDeCobranca
 from conciliacao.execucao import calcular_data_de_referencia, possiveis_duplicidades_nao_decididas
 from conciliacao.identificadores import gerar_txid
+from conciliacao.motor import chaves_em_duplicidade
 from conciliacao.porta import CobrancaIdentificada, PortaDeCobranca, PortaSimulada
 
 
@@ -64,8 +65,7 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
 def _titulos_em_aberto_fora_de_duplicidade(armazenamento: Armazenamento) -> list[Titulo]:
     cancelados = armazenamento.titulos_cancelados_na_origem()
     na_exportacao = [t for t in armazenamento.ultima_fotografia() if chave_do_titulo(t) not in cancelados]
-    duplicidades = possiveis_duplicidades_nao_decididas(armazenamento, na_exportacao)
-    em_duplicidade = {chave for duplicidade in duplicidades for chave in duplicidade.chave}
+    em_duplicidade = chaves_em_duplicidade(possiveis_duplicidades_nao_decididas(armazenamento, na_exportacao))
     saldo = saldos(na_exportacao, armazenamento.confirmacoes_em_vigor())
     return [
         replace(t, valor_centavos=em_aberto)

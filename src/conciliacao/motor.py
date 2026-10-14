@@ -370,6 +370,10 @@ def possiveis_duplicidades(titulos: Iterable[Titulo]) -> list[PossivelDuplicidad
     ]
 
 
+def chaves_em_duplicidade(duplicidades: Iterable[PossivelDuplicidade]) -> frozenset[tuple[str, str]]:
+    return frozenset(chave for duplicidade in duplicidades for chave in duplicidade.chave)
+
+
 def lista_de_cobranca(
     titulos: Iterable[Titulo],
     classificacoes: Iterable[Classificacao],
@@ -378,7 +382,7 @@ def lista_de_cobranca(
 ) -> list[TituloNaCobranca]:
     if data_de_referencia is None:
         return []
-    em_duplicidade = {titulo for duplicidade in duplicidades for titulo in duplicidade.titulos}
+    em_duplicidade = chaves_em_duplicidade(duplicidades)
     propostos = {
         titulo
         for classificacao in classificacoes
@@ -393,7 +397,7 @@ def lista_de_cobranca(
     return [
         TituloNaCobranca(titulo, titulo.valor_centavos, tuple(na_fila[titulo]))
         for titulo in sorted(titulos, key=lambda t: (t.vencimento, t.sistema_de_origem, t.documento))
-        if titulo not in em_duplicidade
+        if (titulo.sistema_de_origem, titulo.documento) not in em_duplicidade
         and (titulo in na_fila or titulo not in propostos)
         and titulo.valor_centavos > 0
         and data_de_referencia > _cobravel_depois_de(titulo)
