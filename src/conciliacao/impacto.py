@@ -591,6 +591,12 @@ def _aba_de_premissas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
         ),
         *((f"Créditos pela fonte: {fonte.value}", analise.fontes.get(fonte, 0)) for fonte in FonteDaVerdade),
         (
+            "Limite da fonte da verdade",
+            f"{analise.fontes.get(FonteDaVerdade.PROPOSTA_OU_SUGESTAO, 0)} de {sum(analise.fontes.values())} Créditos "
+            "não têm gabarito nem decisão confirmada da Analista: a verdade deles é a Proposta ou a sugestão do "
+            "próprio antes, então o depois supõe que o antes acertou o Título e um erro do antes passa para o depois",
+        ),
+        (
             "Franqueados migrados",
             "todos, no Resumo do impacto e na Fila por motivo; na aba Ondas, os das ondas acumuladas",
         ),
