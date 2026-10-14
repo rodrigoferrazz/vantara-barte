@@ -40,6 +40,12 @@ class ConfiguracaoDeMigracao:
 
 
 @dataclass(frozen=True)
+class ConfiguracaoDaAnaliseDeImpacto:
+    semente: int = 1
+    tamanho_da_onda: int = 10
+
+
+@dataclass(frozen=True)
 class Configuracao:
     contas: tuple[ContaDeExtrato, ...]
     encargo: ParametrosDeEncargo = ParametrosDeEncargo()
@@ -47,6 +53,7 @@ class Configuracao:
     ia: ConfiguracaoDaIa | None = None
     limite_de_queda: Decimal = Decimal("10")
     migracao: ConfiguracaoDeMigracao | None = None
+    analise_de_impacto: ConfiguracaoDaAnaliseDeImpacto = ConfiguracaoDaAnaliseDeImpacto()
 
 
 def carregar_configuracao(caminho: Path) -> Configuracao:
@@ -66,7 +73,30 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
         ia=_ia(caminho, dados["ia"]) if "ia" in dados else None,
         limite_de_queda=_limite_de_queda(caminho, dados.get("resumo", {})),
         migracao=_migracao(caminho, dados["migracao"], contas_lidas) if "migracao" in dados else None,
+        analise_de_impacto=_analise_de_impacto(caminho, dados.get("analise_de_impacto", {})),
     )
+
+
+def _analise_de_impacto(caminho: Path, analise: object) -> ConfiguracaoDaAnaliseDeImpacto:
+    if not isinstance(analise, dict):
+        raise ConfiguracaoInvalida(f"{caminho}: [analise_de_impacto] precisa ser uma seção")
+    desconhecidos = sorted(set(analise) - {"semente", "tamanho_da_onda"})
+    if desconhecidos:
+        raise ConfiguracaoInvalida(
+            f"{caminho}: [analise_de_impacto] não conhece {', '.join(desconhecidos)}; use semente e tamanho_da_onda"
+        )
+    padrao = ConfiguracaoDaAnaliseDeImpacto()
+    semente = analise.get("semente", padrao.semente)
+    tamanho_da_onda = analise.get("tamanho_da_onda", padrao.tamanho_da_onda)
+    if isinstance(semente, bool) or not isinstance(semente, int) or semente < 0:
+        raise ConfiguracaoInvalida(
+            f"{caminho}: [analise_de_impacto] semente precisa ser um número inteiro maior ou igual a zero"
+        )
+    if isinstance(tamanho_da_onda, bool) or not isinstance(tamanho_da_onda, int) or tamanho_da_onda < 1:
+        raise ConfiguracaoInvalida(
+            f"{caminho}: [analise_de_impacto] tamanho_da_onda precisa ser um número inteiro de Franqueados maior que zero"
+        )
+    return ConfiguracaoDaAnaliseDeImpacto(semente=semente, tamanho_da_onda=tamanho_da_onda)
 
 
 _RAIZ_DO_CNPJ = re.compile(r"\d{8}")

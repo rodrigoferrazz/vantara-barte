@@ -617,8 +617,7 @@ class CausaRaiz:
         def franqueado(item: Item) -> str:
             if item.franqueado is None:
                 return cls.SEM_FRANQUEADO
-            nomes = sorted(nomes_dos_franqueados.get(item.franqueado, ()))
-            return f"{' / '.join(nomes)} (raiz {item.franqueado})" if nomes else f"raiz {item.franqueado}"
+            return nome_do_franqueado(item.franqueado, nomes_dos_franqueados)
 
         por_franqueado = _agrupar(creditos, franqueado)
         return cls(
@@ -636,6 +635,90 @@ class CausaRaiz:
 
     def fracao_do_valor(self, grupo: GrupoDaCausaRaiz) -> Fraction | None:
         return Fraction(grupo.valor_centavos, self.valor_centavos) if self.valor_centavos else None
+
+
+def nome_do_franqueado(raiz: str, nomes_dos_franqueados: Mapping[str, Iterable[str]]) -> str:
+    nomes = sorted(nomes_dos_franqueados.get(raiz, ()))
+    return f"{' / '.join(nomes)} (raiz {raiz})" if nomes else f"raiz {raiz}"
+
+
+@dataclass(frozen=True)
+class FranqueadoNoRanking:
+    raiz: str
+    nome: str
+    quantidade: int
+    valor_centavos: int
+    posicao: int
+    onda: int
+
+
+@dataclass(frozen=True)
+class RankingDeMigracao:
+    MOTIVOS: ClassVar[frozenset[MotivoDeNaoIdentificacao]] = frozenset(
+        {
+            MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
+            MotivoDeNaoIdentificacao.NOME_AMBIGUO,
+            MotivoDeNaoIdentificacao.MAIS_DE_UMA_COMBINACAO,
+            MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ,
+        }
+    )
+
+    franqueados: tuple[FranqueadoNoRanking, ...]
+    sem_franqueado: GrupoDaCausaRaiz
+    tamanho_da_onda: int
+
+    @classmethod
+    def da_fila(
+        cls, itens: Iterable[Item], nomes_dos_franqueados: Mapping[str, Iterable[str]], tamanho_da_onda: int
+    ) -> "RankingDeMigracao":
+        do_ranking = [
+            item for item in itens if item.destino is Destino.FILA_DE_EXCECOES and item.motivo in cls.MOTIVOS
+        ]
+        por_franqueado: dict[str | None, list[Item]] = {}
+        for item in do_ranking:
+            por_franqueado.setdefault(_franqueado_do_credito(item), []).append(item)
+        sem_franqueado = por_franqueado.pop(None, [])
+        totais = sorted(
+            (
+                (raiz, len(do_franqueado), sum(item.lancamento.valor_centavos for item in do_franqueado))
+                for raiz, do_franqueado in por_franqueado.items()
+                if raiz is not None
+            ),
+            key=lambda total: (-total[1], -total[2], total[0]),
+        )
+        return cls(
+            franqueados=tuple(
+                FranqueadoNoRanking(
+                    raiz=raiz,
+                    nome=nome_do_franqueado(raiz, nomes_dos_franqueados),
+                    quantidade=quantidade,
+                    valor_centavos=valor_centavos,
+                    posicao=posicao,
+                    onda=(posicao - 1) // tamanho_da_onda + 1,
+                )
+                for posicao, (raiz, quantidade, valor_centavos) in enumerate(totais, start=1)
+            ),
+            sem_franqueado=GrupoDaCausaRaiz(
+                CausaRaiz.SEM_FRANQUEADO,
+                len(sem_franqueado),
+                sum(item.lancamento.valor_centavos for item in sem_franqueado),
+            ),
+            tamanho_da_onda=tamanho_da_onda,
+        )
+
+    @property
+    def ondas(self) -> tuple[tuple[FranqueadoNoRanking, ...], ...]:
+        por_onda: dict[int, list[FranqueadoNoRanking]] = {}
+        for franqueado in self.franqueados:
+            por_onda.setdefault(franqueado.onda, []).append(franqueado)
+        return tuple(tuple(da_onda) for da_onda in por_onda.values())
+
+
+def _franqueado_do_credito(item: Item) -> str | None:
+    if item.franqueado is not None:
+        return item.franqueado
+    sugeridos = {titulo.franqueado for titulo in item.titulos}
+    return next(iter(sugeridos)) if len(sugeridos) == 1 else None
 
 
 @dataclass(frozen=True)
