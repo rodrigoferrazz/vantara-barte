@@ -85,6 +85,7 @@ class TipoDeDecisao(StrEnum):
     DEVOLUCAO = "devolução"
     ERRO = "erro"
     CONCILIADO_FORA = "conciliado fora"
+    POSSIVEL_FONTE_NAO_INTEGRADA = "possível fonte não integrada"
     MESMA_DIVIDA = "mesma dívida"
     DIVIDAS_DISTINTAS = "dívidas distintas"
     REVERTER = "reverter"
@@ -317,6 +318,7 @@ class DecisoesLidas:
     nao_aplicadas: tuple[str, ...] = ()
     classificadas: int = 0
     conciliados_fora: int = 0
+    fontes_nao_integradas: int = 0
     duplicidades: int = 0
     revertidas: int = 0
     conflitos: tuple[str, ...] = ()

@@ -536,3 +536,99 @@ def test_fila_sai_no_workbook_com_colunas_de_decisao_vazias(
 
     assert [linha[coluna] for coluna in (DECISAO, TITULOS_ESCOLHIDOS, FRANQUEADO, REFERENCIA)] == [None] * 4
     assert Destino.FILA_DE_EXCECOES.value in load_workbook(workbook).sheetnames
+
+
+def test_credito_classificado_como_possivel_fonte_nao_integrada_continua_vivo_na_fila_com_esse_motivo(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    _extrato(pasta, "itau_cobranca.csv", LinhaItau("05/03/2025", "DEPOSITO NAO IDENTIFICADO", "777,00"))
+    workbook = tmp_path / "conciliacao.xlsx"
+    [item] = _executar(pasta, armazenamento, workbook).fila_de_excecoes
+    assert item.motivo is MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR
+    _resolver(workbook, {item.identificador: {DECISAO: "Possivel fonte nao integrada"}})
+
+    segunda = _executar(pasta, armazenamento, workbook)
+    [fila_resolvida] = [
+        str(linha[1])
+        for linha in load_workbook(workbook)["Resumo"].iter_rows(values_only=True)
+        if linha[0] == "Fila resolvida pelo Excel"
+    ]
+    terceira = _executar(pasta, armazenamento, workbook)
+
+    assert "1 classificado(s) como Possível fonte não integrada" in fila_resolvida
+    for resultado in (segunda, terceira):
+        [na_fila] = resultado.fila_de_excecoes
+        assert na_fila.lancamento == item.lancamento
+        assert na_fila.motivo is MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA
+        assert "Classificado pela Analista como Possível fonte não integrada" in na_fila.explicacao
+        por_motivo = {g.nome: (g.quantidade, g.valor_centavos) for g in resultado.causa_raiz.por_motivo}
+        assert por_motivo[MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA.value] == (1, 77700)
+        assert por_motivo[MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR.value] == (0, 0)
+    assert segunda.resumo.decisoes.fontes_nao_integradas == 1
+    assert terceira.resumo.decisoes.fontes_nao_integradas == 0
+    [decisao] = armazenamento.decisoes()
+    assert (decisao.tipo, decisao.origem) == (TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA, "Excel")
+
+
+def test_possivel_fonte_nao_integrada_marcada_conciliado_fora_conta_na_causa_raiz_com_esse_motivo(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    _extrato(pasta, "itau_cobranca.csv", LinhaItau("05/03/2025", "DEPOSITO NAO IDENTIFICADO", "777,00"))
+    workbook = tmp_path / "conciliacao.xlsx"
+    [item] = _executar(pasta, armazenamento, workbook).fila_de_excecoes
+    _resolver(workbook, {item.identificador: {DECISAO: "possível fonte não integrada"}})
+    [classificado] = _executar(pasta, armazenamento, workbook).fila_de_excecoes
+    _resolver(
+        workbook,
+        {classificado.identificador: {DECISAO: "conciliado fora", FRANQUEADO: "30400500", REFERENCIA: "planilha U3"}},
+    )
+
+    resultado = _executar(pasta, armazenamento, workbook)
+
+    assert resultado.fila_de_excecoes == []
+    por_motivo = {g.nome: g.quantidade for g in resultado.causa_raiz.por_motivo}
+    assert por_motivo[MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA.value] == 1
+    assert [g.nome for g in resultado.causa_raiz.por_franqueado] == ["raiz 30400500"]
+
+
+def test_credito_classificado_como_possivel_fonte_nao_integrada_casa_quando_o_titulo_aparece(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    escrever_protheus(pasta, _titulos(TituloProtheus(documento="NF 131201", valor="1.000,00", cnpj=CNPJ_A)))
+    workbook = tmp_path / "conciliacao.xlsx"
+    _extrato(pasta, "itau_cobranca.csv", LinhaItau("05/03/2025", "TARIFA", "1,00", tipo="D"))
+    _executar(pasta, armazenamento, workbook)
+    escrever_protheus(pasta, [])
+    _extrato(pasta, "itau_cobranca_2.csv", LinhaItau("06/03/2025", f"TED RECEBIDA CNPJ {CNPJ_A}", "300,00"))
+    [item] = _executar(pasta, armazenamento, workbook).fila_de_excecoes
+    _resolver(workbook, {item.identificador: {DECISAO: "possível fonte não integrada"}})
+    _executar(pasta, armazenamento, workbook)
+    escrever_protheus(pasta, _titulos(TituloProtheus(documento="NF 131202", valor="300,00", cnpj=CNPJ_A)))
+
+    resultado = _executar(pasta, armazenamento, workbook)
+
+    assert resultado.fila_de_excecoes == []
+    [proposta] = resultado.lista_de_baixa
+    assert [t.documento for t in proposta.titulos] == ["NF 131202"]
+
+
+def test_classificacao_de_possivel_fonte_nao_integrada_nao_vale_para_a_lista_de_baixa(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    escrever_protheus(pasta, _titulos(TituloProtheus(documento="NF 131301", valor="300,00", cnpj=CNPJ_A)))
+    _extrato(pasta, "itau_cobranca.csv", LinhaItau("06/03/2025", f"TED RECEBIDA CNPJ {CNPJ_A}", "300,00"))
+    workbook = tmp_path / "conciliacao.xlsx"
+    [proposta] = _executar(pasta, armazenamento, workbook).lista_de_baixa
+    livro = load_workbook(workbook)
+    aba = livro["Lista de baixa"]
+    cabecalho = [str(c.value) for c in aba[1]]
+    aba.cell(row=2, column=cabecalho.index(DECISAO) + 1).value = "possível fonte não integrada"
+    livro.properties.lastModifiedBy = "Ana Analista"
+    livro.save(workbook)
+
+    resultado = _executar(pasta, armazenamento, workbook)
+
+    assert [i.identificador for i in resultado.lista_de_baixa] == [proposta.identificador]
+    assert armazenamento.decisoes() == ()
+    [aviso] = resultado.resumo.decisoes.nao_aplicadas
+    assert proposta.identificador in aviso

@@ -61,7 +61,7 @@ def executar_conciliacao(
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
         pelo_saldo = _com_divergencias(
-            _com_antecipacoes(
+            _com_classificacoes_da_analista(
                 conciliar(
                     titulos,
                     lancamentos.values(),
@@ -74,7 +74,8 @@ def executar_conciliacao(
                     armazenamento.pares_rejeitados(),
                     armazenamento.pagadores_conhecidos(),
                 ),
-                armazenamento.antecipacoes(),
+                armazenamento.classificados_como(TipoDeDecisao.ANTECIPACAO),
+                armazenamento.classificados_como(TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA),
             ),
             armazenamento.divergencias(),
         )
@@ -117,19 +118,38 @@ def executar_conciliacao(
     return armazenamento.carregar_resultado(execucao)
 
 
-def _com_antecipacoes(
-    classificacoes: list[Classificacao], antecipacoes: Mapping[ChaveNatural, datetime]
+def _com_classificacoes_da_analista(
+    classificacoes: list[Classificacao],
+    antecipacoes: Mapping[ChaveNatural, datetime],
+    fontes_nao_integradas: Mapping[ChaveNatural, datetime],
 ) -> list[Classificacao]:
     return [
-        replace(
-            c,
-            explicacao=f"{c.explicacao} Classificado pela Analista como {TipoDeDecisao.ANTECIPACAO.value} "
-            f"em {momento:%d/%m/%Y}; o Crédito continua vivo e é retentado a cada nova importação.",
-        )
-        if (momento := antecipacoes.get(c.lancamento.chave_natural)) is not None
-        else c
-        for c in classificacoes
+        _como_fonte_nao_integrada(_como_antecipacao(c, antecipacoes), fontes_nao_integradas) for c in classificacoes
     ]
+
+
+def _como_antecipacao(c: Classificacao, antecipacoes: Mapping[ChaveNatural, datetime]) -> Classificacao:
+    momento = antecipacoes.get(c.lancamento.chave_natural)
+    if momento is None:
+        return c
+    return replace(
+        c,
+        explicacao=f"{c.explicacao} Classificado pela Analista como {TipoDeDecisao.ANTECIPACAO.value} "
+        f"em {momento:%d/%m/%Y}; o Crédito continua vivo e é retentado a cada nova importação.",
+    )
+
+
+def _como_fonte_nao_integrada(c: Classificacao, fontes: Mapping[ChaveNatural, datetime]) -> Classificacao:
+    momento = fontes.get(c.lancamento.chave_natural)
+    if momento is None or c.destino is not Destino.FILA_DE_EXCECOES:
+        return c
+    fonte = MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA
+    return replace(
+        c,
+        motivo=fonte,
+        explicacao=f"{c.explicacao} Classificado pela Analista como {fonte.value} em {momento:%d/%m/%Y} "
+        f"(o motor apontava '{c.motivo}'); o Crédito continua vivo e é retentado a cada nova importação.",
+    )
 
 
 def _com_divergencias(

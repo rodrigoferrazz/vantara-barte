@@ -186,3 +186,27 @@ def test_conflito_nao_volta_na_execucao_seguinte(pasta: Path, armazenamento: Arm
 
     assert terceira.resumo.decisoes.conflitos == ()
     assert [item.identificador for item in terceira.lista_de_baixa] == [disputado.identificador]
+
+
+def test_possivel_fonte_nao_integrada_no_excel_e_na_tela_e_conflito_e_nada_e_aplicado(
+    pasta: Path, armazenamento: Armazenamento, tmp_path: Path
+) -> None:
+    _dois_na_lista_e_um_na_fila(pasta)
+    workbook = tmp_path / "conciliacao.xlsx"
+    primeira = _executar(pasta, armazenamento, workbook)
+    [na_fila] = primeira.fila_de_excecoes
+    _salvar_pela_analista(workbook, {na_fila.identificador: "possível fonte não integrada"})
+    registrar_decisao_da_tela(
+        armazenamento,
+        LinhaDeDecisao(ABA_DA_FILA_DE_EXCECOES, na_fila.identificador, "possível fonte não integrada"),
+        "rodrigo",
+        NA_TELA,
+    )
+
+    segunda = _executar(pasta, armazenamento, workbook)
+
+    [ainda_na_fila] = segunda.fila_de_excecoes
+    assert ainda_na_fila.motivo is na_fila.motivo
+    assert na_fila.identificador not in {d.item for d in armazenamento.decisoes()}
+    assert len(segunda.resumo.decisoes.conflitos) == 1
+    assert segunda.resumo.decisoes.fontes_nao_integradas == 0

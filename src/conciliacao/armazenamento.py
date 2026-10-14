@@ -320,11 +320,11 @@ class Armazenamento:
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
 
-    def antecipacoes(self) -> dict[ChaveNatural, datetime]:
+    def classificados_como(self, tipo: TipoDeDecisao) -> dict[ChaveNatural, datetime]:
         linhas = self._conexao.execute(
             f"SELECT d.momento, {_COLUNAS_DO_LANCAMENTO_L} FROM decisoes d JOIN lancamentos l ON l.id = d.lancamento_id"
             " WHERE d.tipo = ? ORDER BY d.id",
-            (TipoDeDecisao.ANTECIPACAO.value,),
+            (tipo.value,),
         )
         return {_lancamento(lancamento).chave_natural: datetime.fromisoformat(momento) for momento, *lancamento in linhas}
 
@@ -1068,6 +1068,7 @@ class Armazenamento:
             nao_aplicadas=tuple(texto for (texto,) in avisos),
             classificadas=sum(n for tipo, n in tipos.items() if tipo.classifica_credito_sem_titulo),
             conciliados_fora=tipos[TipoDeDecisao.CONCILIADO_FORA],
+            fontes_nao_integradas=tipos[TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA],
             duplicidades=duplicidades,
             revertidas=tipos[TipoDeDecisao.REVERTER],
             conflitos=tuple(texto for (texto,) in conflitos),

@@ -51,6 +51,7 @@ DECISOES_DE_CREDITO_DA_FILA = (
     TipoDeDecisao.DEVOLUCAO,
     TipoDeDecisao.ERRO,
     TipoDeDecisao.CONCILIADO_FORA,
+    TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA,
 )
 DECISOES_DE_DUPLICIDADE = (TipoDeDecisao.MESMA_DIVIDA, TipoDeDecisao.DIVIDAS_DISTINTAS)
 _TITULO_COM_SISTEMA = re.compile(r"(?P<documento>.+?)\s*\((?P<sistema>[^()]+)\)")
@@ -180,6 +181,8 @@ class _Interpretacao:
             return self._confirmacao(item, titulos, autoria)
         if tipo is TipoDeDecisao.CONCILIADO_FORA:
             return self._conciliado_fora(linha, item, autoria)
+        if tipo is TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA:
+            return _Decisao(item.identificador, tipo, frozenset(), lambda: self._registrar(item, tipo, (), autoria))
         if item.motivo is not MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO:
             raise _NaoAplicada(
                 f"Item {linha.item}: '{tipo.value}' só classifica Crédito sem título em aberto, e o Motivo do item é "
@@ -447,6 +450,7 @@ def aplicar_decisoes(
             nao_aplicadas=tuple(avisos),
             classificadas=sum(1 for tipo in tipos if tipo.classifica_credito_sem_titulo),
             conciliados_fora=tipos.count(TipoDeDecisao.CONCILIADO_FORA),
+            fontes_nao_integradas=tipos.count(TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA),
             duplicidades=len(duplicidades),
             revertidas=tipos.count(TipoDeDecisao.REVERTER),
             conflitos=conflitos,

@@ -451,3 +451,26 @@ def test_conflito_entre_excel_e_tela_aparece_na_tela_com_os_mesmos_totais_do_wor
     assert pagina.por_id("resumo").linhas() == resumo_do_workbook
     assert ["Conflitos entre Excel e tela", "1"] in resumo_do_workbook
     assert na_lista.identificador not in _decisoes(estado)
+
+
+def test_classificar_item_da_fila_como_possivel_fonte_nao_integrada_pela_tela(
+    endereco: str, pasta: Path, estado: Path
+) -> None:
+    _cobranca_e_em_analise(pasta)
+    primeira = _executar_e_fechar(pasta, estado)
+    [na_fila] = primeira.fila_de_excecoes
+    assert "possível fonte não integrada" in _abrir(endereco).por_id("resolver-fila").texto
+
+    _postar(
+        endereco,
+        "/decidir",
+        {"aba": "Fila de exceções", "item": na_fila.identificador, "decisao": "possível fonte não integrada"},
+    )
+
+    segunda = _executar_e_fechar(pasta, estado)
+    decisao = _decisoes(estado)[na_fila.identificador]
+    assert (decisao.tipo, decisao.origem) == (TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA, "Tela")
+    [classificado] = segunda.fila_de_excecoes
+    assert classificado.lancamento == na_fila.lancamento
+    assert classificado.motivo is MotivoDeNaoIdentificacao.POSSIVEL_FONTE_NAO_INTEGRADA
+    assert segunda.resumo.decisoes.fontes_nao_integradas == 1

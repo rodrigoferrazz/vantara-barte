@@ -143,6 +143,7 @@ def linhas_do_resumo(resultado: Resultado) -> list[tuple[str, str | int]]:
         (
             "Fila resolvida pelo Excel",
             f"{decisoes.classificadas} Crédito(s) sem título classificado(s), "
+            f"{decisoes.fontes_nao_integradas} classificado(s) como Possível fonte não integrada, "
             f"{decisoes.conciliados_fora} Conciliado(s) fora, "
             f"{decisoes.duplicidades} Possível(is) duplicidade(s) decidida(s)",
         )
