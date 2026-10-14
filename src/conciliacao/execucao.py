@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -6,7 +8,17 @@ from conciliacao.armazenamento import Armazenamento
 from conciliacao.configuracao import Configuracao
 from conciliacao.conferencia import conferir_soma
 from conciliacao.decisoes import DecisoesAplicadas, aplicar_decisoes_do_excel
-from conciliacao.dominio import DataDeReferencia, DecisoesLidas, Lancamento, Natureza, Resultado, UltimaDataDaConta
+from conciliacao.dominio import (
+    ChaveNatural,
+    Classificacao,
+    DataDeReferencia,
+    DecisoesLidas,
+    Lancamento,
+    Natureza,
+    Resultado,
+    TipoDeDecisao,
+    UltimaDataDaConta,
+)
 from conciliacao.motor import conciliar, lista_de_cobranca, possiveis_duplicidades
 from conciliacao.parecerista import PareceristaDeNome
 
@@ -26,23 +38,29 @@ def executar_conciliacao(
             else DecisoesAplicadas(DecisoesLidas(), ())
         )
         baixados = armazenamento.titulos_com_baixa_confirmada()
-        titulos = [t for t in leitura.titulos if (t.sistema_de_origem, t.documento) not in baixados]
+        cancelados = armazenamento.titulos_cancelados_na_origem()
+        na_exportacao = [t for t in leitura.titulos if (t.sistema_de_origem, t.documento) not in cancelados]
+        titulos = [t for t in na_exportacao if (t.sistema_de_origem, t.documento) not in baixados]
         identificadores, novos = armazenamento.guardar_lancamentos(leitura.lancamentos)
         lancamentos: dict[int, Lancamento] = {}
         for lancamento in leitura.lancamentos:
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
-        classificacoes = conciliar(
-            titulos,
-            lancamentos.values(),
-            armazenamento.franqueados().values(),
-            configuracao.encargo,
-            nome_do_pagador,
-            canal_do_credito,
-            configuracao.limite_de_combinacoes,
-            parecerista,
-            armazenamento.pares_rejeitados(),
+        classificacoes = _com_antecipacoes(
+            conciliar(
+                titulos,
+                lancamentos.values(),
+                armazenamento.franqueados().values(),
+                configuracao.encargo,
+                nome_do_pagador,
+                canal_do_credito,
+                configuracao.limite_de_combinacoes,
+                parecerista,
+                armazenamento.pares_rejeitados(),
+                armazenamento.pagadores_conhecidos(),
+            ),
+            armazenamento.antecipacoes(),
         )
         conferir_soma(list(lancamentos.values()), classificacoes)
         id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
@@ -53,7 +71,8 @@ def executar_conciliacao(
                 for banco, conta in dict.fromkeys((c.banco, c.conta) for c in configuracao.contas)
             )
         )
-        duplicidades = possiveis_duplicidades(leitura.titulos)
+        decididas = armazenamento.duplicidades_decididas()
+        duplicidades = [d for d in possiveis_duplicidades(na_exportacao) if d.chave not in decididas]
         cobranca = lista_de_cobranca(titulos, classificacoes, duplicidades, data_de_referencia.data)
         execucao = armazenamento.registrar_execucao(
             lancamentos_novos=novos,
@@ -68,5 +87,21 @@ def executar_conciliacao(
             ],
             decisoes_aplicadas=decisoes.registradas,
             avisos_das_decisoes=decisoes.lidas.nao_aplicadas,
+            decisoes_de_duplicidade_aplicadas=decisoes.duplicidades,
         )
     return armazenamento.carregar_resultado(execucao)
+
+
+def _com_antecipacoes(
+    classificacoes: list[Classificacao], antecipacoes: Mapping[ChaveNatural, datetime]
+) -> list[Classificacao]:
+    return [
+        replace(
+            c,
+            explicacao=f"{c.explicacao} Classificado pela Analista como {TipoDeDecisao.ANTECIPACAO.value} "
+            f"em {momento:%d/%m/%Y}; o Crédito continua vivo e é retentado a cada nova importação.",
+        )
+        if (momento := antecipacoes.get(c.lancamento.chave_natural)) is not None
+        else c
+        for c in classificacoes
+    ]

@@ -12,6 +12,7 @@ from conciliacao.dominio import (
     Lancamento,
     MotivoDeNaoIdentificacao,
     Natureza,
+    PagadorConhecido,
     ParecerSobreFranqueado,
     ParRejeitado,
     RegraDaProposta,
@@ -96,6 +97,7 @@ class _Titulos:
     nome_do_pagador: NomeDoPagador
     limite_de_combinacoes: int
     parecerista: PareceristaDeNome
+    conhecidos: dict[str, PagadorConhecido]
 
     @property
     def franqueados(self) -> set[str]:
@@ -171,9 +173,11 @@ def conciliar(
     limite_de_combinacoes: int,
     parecerista: PareceristaDeNome,
     pares_rejeitados: Iterable[ParRejeitado] = (),
+    pagadores_conhecidos: Iterable[PagadorConhecido] = (),
 ) -> list[Classificacao]:
     todos = list(titulos)
     nomes = _nomes_dos_franqueados(franqueados, todos)
+    conhecidos = {pagador.nome: pagador for pagador in pagadores_conhecidos}
 
     def abertos(titulos: list[Titulo]) -> _Titulos:
         por_nosso_numero: dict[str, list[Titulo]] = defaultdict(list)
@@ -191,6 +195,7 @@ def conciliar(
             nome_do_pagador,
             limite_de_combinacoes,
             parecerista,
+            conhecidos,
         )
 
     rejeitados: dict[ChaveNatural, list[ParRejeitado]] = defaultdict(list)
@@ -345,7 +350,14 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
     raizes = {raiz_do_cnpj(c) for c in documentos}
     if len(raizes) == 1:
         franqueado = raiz_do_cnpj(documentos[0])
-        return _por_documento(lancamento, documentos[0], abertos.por_franqueado.get(franqueado, []), abertos)
+        return _por_pagador_identificado(
+            lancamento,
+            franqueado,
+            f"CNPJ {documentos[0]} no histórico identifica o Franqueado de raiz {franqueado}",
+            TipoDeEvidencia.CNPJ_CPF,
+            (RegraDaProposta.DOCUMENTO_E_VALOR_UNICO, RegraDaProposta.DOCUMENTO_E_SOMA_EXATA),
+            abertos,
+        )
     if raizes:
         return _sem_identificacao(
             lancamento,
@@ -354,12 +366,38 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
         )
     nome = abertos.nome_do_pagador(lancamento)
     normalizado = nome_normalizado(nome) if nome else ""
+    conhecido = abertos.conhecidos.get(normalizado) if normalizado else None
+    if nome and conhecido and (conhecido_de := conhecido.franqueado):
+        return _por_pagador_identificado(
+            lancamento,
+            conhecido_de,
+            f"Nome '{nome}' do Extrato é Pagador conhecido do Franqueado de raiz {conhecido_de}, confirmado pela Analista",
+            TipoDeEvidencia.PAGADOR_CONHECIDO,
+            (RegraDaProposta.PAGADOR_CONHECIDO_E_VALOR_UNICO, RegraDaProposta.PAGADOR_CONHECIDO_E_SOMA_EXATA),
+            abertos,
+        )
     por_prefixo = [n for n in abertos.nomes if normalizado and n.normalizado.startswith(normalizado)]
     if nome and por_prefixo:
-        return _por_nome(lancamento, nome, por_prefixo, abertos)
-    if nome and normalizado:
-        return _por_parecer(lancamento, nome, abertos)
-    return _so_valor(lancamento, None, abertos)
+        classificacao = _por_nome(lancamento, nome, por_prefixo, abertos)
+    elif nome and normalizado:
+        classificacao = _por_parecer(lancamento, nome, abertos)
+    else:
+        return _so_valor(lancamento, None, abertos)
+    return _confirmado_para_mais_de_um(classificacao, nome, conhecido) if conhecido else classificacao
+
+
+def _confirmado_para_mais_de_um(
+    classificacao: Classificacao, nome: str, conhecido: PagadorConhecido
+) -> Classificacao:
+    explicacao = (
+        f"{classificacao.explicacao} O nome '{nome}' foi confirmado pela Analista para mais de um Franqueado "
+        f"(raízes {', '.join(conhecido.franqueados)}) e não é Pagador conhecido."
+    )
+    if classificacao.motivo is MotivoDeNaoIdentificacao.PAGADOR_PROVAVEL_PRIMEIRA_VEZ:
+        return replace(
+            classificacao, explicacao=explicacao, motivo=MotivoDeNaoIdentificacao.NOME_AMBIGUO, franqueado=None
+        )
+    return replace(classificacao, explicacao=explicacao)
 
 
 def _sem_identificacao(
@@ -565,10 +603,16 @@ def _so_valor(lancamento: Lancamento, nome: str | None, abertos: _Titulos) -> Cl
     )
 
 
-def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo], abertos: _Titulos) -> Classificacao:
+def _por_pagador_identificado(
+    lancamento: Lancamento,
+    franqueado: str,
+    pagador: str,
+    evidencia: TipoDeEvidencia,
+    regras: tuple[RegraDaProposta, RegraDaProposta],
+    abertos: _Titulos,
+) -> Classificacao:
     valor = formatar_reais(lancamento.valor_centavos)
-    franqueado = raiz_do_cnpj(documento)
-    pagador = f"CNPJ {documento} no histórico identifica o Franqueado de raiz {franqueado}"
+    titulos = abertos.por_franqueado.get(franqueado, [])
 
     def fila(
         motivo: MotivoDeNaoIdentificacao,
@@ -578,7 +622,7 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
     ) -> Classificacao:
         return Classificacao(
             lancamento=lancamento,
-            evidencia=(TipoDeEvidencia.CNPJ_CPF,),
+            evidencia=(evidencia,),
             destino=Destino.FILA_DE_EXCECOES,
             titulos=sugeridos,
             explicacao=explicacao,
@@ -593,16 +637,12 @@ def _por_documento(lancamento: Lancamento, documento: str, titulos: list[Titulo]
     if opcao := busca.unica:
         return Classificacao(
             lancamento=lancamento,
-            evidencia=(TipoDeEvidencia.CNPJ_CPF,),
+            evidencia=(evidencia,),
             destino=Destino.LISTA_DE_BAIXA,
             titulos=tuple(titulo for titulo, _ in opcao.titulos),
             explicacao=f"{pagador}; o valor {valor} é Valor único entre os Títulos em aberto dele: {opcao.descrever()}.",
             franqueado=franqueado,
-            regra=(
-                RegraDaProposta.DOCUMENTO_E_VALOR_UNICO
-                if len(opcao.titulos) == 1
-                else RegraDaProposta.DOCUMENTO_E_SOMA_EXATA
-            ),
+            regra=regras[0] if len(opcao.titulos) == 1 else regras[1],
         )
     if busca.fecha:
         return fila(

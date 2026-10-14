@@ -6,12 +6,12 @@
 
 **Status:** ready-for-agent
 
-- [ ] Item da Fila resolvido com Título escolhido sai da Fila e segue o mesmo caminho de uma confirmação da Lista
-- [ ] Uma confirmação por nome cria Pagador conhecido; o próximo Crédito com o mesmo histórico e Valor único vai para a Lista
-- [ ] Mesmo histórico confirmado para outro Franqueado desativa o Pagador conhecido e o histórico volta sempre para a Fila
-- [ ] Confirmações por valor ou soma não criam regra
-- [ ] 'Mesma dívida' tira o outro Título da cobrança para sempre e o lista para cancelamento na origem
-- [ ] Conciliado fora tira o Crédito da Fila e mantém a contagem no relatório de causa raiz
-- [ ] Decisões registram modelo e versão do prompt quando o item teve parecer da IA
+- [x] Item da Fila resolvido com Título escolhido sai da Fila e segue o mesmo caminho de uma confirmação da Lista
+- [x] Uma confirmação por nome cria Pagador conhecido; o próximo Crédito com o mesmo histórico e Valor único vai para a Lista
+- [x] Mesmo histórico confirmado para outro Franqueado desativa o Pagador conhecido e o histórico volta sempre para a Fila
+- [x] Confirmações por valor ou soma não criam regra
+- [x] 'Mesma dívida' tira o outro Título da cobrança para sempre e o lista para cancelamento na origem
+- [x] Conciliado fora tira o Crédito da Fila e mantém a contagem no relatório de causa raiz
+- [x] Decisões registram modelo e versão do prompt quando o item teve parecer da IA
 
 Spec: `.scratch/conciliacao-fase1/spec.md`

@@ -17,15 +17,26 @@ from conciliacao.dominio import (
     Resumo,
     TipoDeDecisao,
     Titulo,
+    TituloACancelar,
     TituloNaCobranca,
 )
 from conciliacao.normalizacao import formatar_reais
 
 ABA_DA_LISTA_DE_BAIXA = Destino.LISTA_DE_BAIXA.value
+ABA_DA_FILA_DE_EXCECOES = Destino.FILA_DE_EXCECOES.value
 LINHA_DA_EXECUCAO_NO_RESUMO = "Execução"
 COLUNA_DO_ITEM = "Item"
 COLUNA_DA_DECISAO = "Decisão"
 COLUNA_DO_MOTIVO_DA_REJEICAO = "Motivo da rejeição"
+COLUNA_DOS_TITULOS_ESCOLHIDOS = "Títulos escolhidos"
+COLUNA_DO_FRANQUEADO_DO_CONCILIADO_FORA = "Franqueado do Conciliado fora (CNPJ)"
+COLUNA_DA_REFERENCIA_DO_CONCILIADO_FORA = "Referência do Conciliado fora"
+_COLUNAS_DE_DECISAO_DA_FILA = (
+    COLUNA_DA_DECISAO,
+    COLUNA_DOS_TITULOS_ESCOLHIDOS,
+    COLUNA_DO_FRANQUEADO_DO_CONCILIADO_FORA,
+    COLUNA_DA_REFERENCIA_DO_CONCILIADO_FORA,
+)
 
 _FORMATO_DE_VALOR = "#,##0.00"
 _FORMATO_DE_DATA = "DD/MM/YYYY"
@@ -44,11 +55,20 @@ def gerar_workbook(resultado: Resultado, caminho: Path) -> None:
         ("Títulos", "Explicação", COLUNA_DA_DECISAO, COLUNA_DO_MOTIVO_DA_REJEICAO),
     )
     _aba_de_baixa_manual(workbook.create_sheet("Baixa manual no ERP"), resultado.baixa_manual)
-    fila = workbook.create_sheet(Destino.FILA_DE_EXCECOES.value)
+    _aba_de_cancelar_na_origem(workbook.create_sheet("Cancelar na origem"), resultado.cancelar_na_origem)
+    fila = workbook.create_sheet(ABA_DA_FILA_DE_EXCECOES)
     _aba_de_itens(
         fila,
         resultado.fila_de_excecoes,
-        ("Motivo", "Títulos sugeridos", "Evidência", "O que falta", "Explicação", "Parecer da IA"),
+        (
+            "Motivo",
+            "Títulos sugeridos",
+            "Evidência",
+            "O que falta",
+            "Explicação",
+            "Parecer da IA",
+            *_COLUNAS_DE_DECISAO_DA_FILA,
+        ),
     )
     _acrescentar_itens_de_titulo(fila, resultado.itens_de_titulo)
     _aba_de_cobranca(workbook.create_sheet("Lista de cobrança"), resultado)
@@ -95,6 +115,22 @@ def _preencher_resumo(aba: Worksheet, resultado: Resultado) -> None:
             f"{len(decisoes.nao_aplicadas)} não aplicada(s)",
         )
     )
+    aba.append(
+        (
+            "Fila resolvida pelo Excel",
+            f"{decisoes.classificadas} Crédito(s) sem título classificado(s), "
+            f"{decisoes.conciliados_fora} Conciliado(s) fora, "
+            f"{decisoes.duplicidades} Possível(is) duplicidade(s) decidida(s)",
+        )
+    )
+    aba.append(
+        (
+            "Conciliado fora (na causa raiz)",
+            f"{len(resultado.conciliados_fora)} Crédito(s), "
+            f"{formatar_reais(sum(item.lancamento.valor_centavos for item in resultado.conciliados_fora))}",
+        )
+    )
+    aba.append(("Títulos a cancelar na origem", len(resultado.cancelar_na_origem)))
     for aviso in decisoes.nao_aplicadas:
         aba.append(("Decisão não aplicada", aviso))
     aba.column_dimensions["A"].width = 32
@@ -131,8 +167,11 @@ def _aba_de_itens(aba: Worksheet, itens: list[Item], colunas_do_destino: tuple[s
             "O que falta": item.o_que_falta,
             "Explicação": item.explicacao,
             "Parecer da IA": "; ".join(parecer.descrever() for parecer in item.pareceres),
-            COLUNA_DA_DECISAO: TipoDeDecisao.CONFIRMAR.value,
+            COLUNA_DA_DECISAO: TipoDeDecisao.CONFIRMAR.value if item.destino is Destino.LISTA_DE_BAIXA else None,
             COLUNA_DO_MOTIVO_DA_REJEICAO: None,
+            COLUNA_DOS_TITULOS_ESCOLHIDOS: None,
+            COLUNA_DO_FRANQUEADO_DO_CONCILIADO_FORA: None,
+            COLUNA_DA_REFERENCIA_DO_CONCILIADO_FORA: None,
         }
         aba.append(
             (
@@ -190,6 +229,29 @@ def _aba_de_baixa_manual(aba: Worksheet, baixas: tuple[BaixaManual, ...]) -> Non
             aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_DATA
         for coluna in (6, 7, 12):
             aba.cell(row=aba.max_row, column=coluna).number_format = _FORMATO_DE_VALOR
+    aba.freeze_panes = "A2"
+
+
+def _aba_de_cancelar_na_origem(aba: Worksheet, titulos: tuple[TituloACancelar, ...]) -> None:
+    aba.append(
+        ("Título", "Sistema de origem", "Franqueado", "CNPJ", "Vencimento", "Valor", "Título oficial", "Item")
+    )
+    for cancelar in titulos:
+        titulo = cancelar.titulo
+        aba.append(
+            (
+                titulo.documento,
+                titulo.sistema_de_origem,
+                titulo.cliente,
+                titulo.cnpj,
+                titulo.vencimento,
+                Decimal(titulo.valor_centavos) / 100,
+                _titulos((cancelar.oficial,)),
+                cancelar.item,
+            )
+        )
+        aba.cell(row=aba.max_row, column=5).number_format = _FORMATO_DE_DATA
+        aba.cell(row=aba.max_row, column=6).number_format = _FORMATO_DE_VALOR
     aba.freeze_panes = "A2"
 
 

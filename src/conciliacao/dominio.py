@@ -66,17 +66,39 @@ class TipoDeEvidencia(StrEnum):
     NOME_POR_PREFIXO = "nome por prefixo"
     SO_VALOR = "só valor"
     PARECER_DE_LLM = "parecer de LLM"
+    PAGADOR_CONHECIDO = "Pagador conhecido"
 
 
 class RegraDaProposta(StrEnum):
     NOSSO_NUMERO_E_VALOR = "nosso número + valor exato ou dentro do Encargo"
     DOCUMENTO_E_VALOR_UNICO = "CNPJ/CPF + Valor único"
     DOCUMENTO_E_SOMA_EXATA = "CNPJ/CPF + soma exata com uma única combinação"
+    PAGADOR_CONHECIDO_E_VALOR_UNICO = "nome de Pagador conhecido + Valor único"
+    PAGADOR_CONHECIDO_E_SOMA_EXATA = "nome de Pagador conhecido + soma exata com uma única combinação"
 
 
 class TipoDeDecisao(StrEnum):
     CONFIRMAR = "confirmar"
     REJEITAR = "rejeitar"
+    ANTECIPACAO = "antecipação"
+    DEVOLUCAO = "devolução"
+    ERRO = "erro"
+    CONCILIADO_FORA = "conciliado fora"
+    MESMA_DIVIDA = "mesma dívida"
+    DIVIDAS_DISTINTAS = "dívidas distintas"
+
+    @property
+    def encerra_o_credito(self) -> bool:
+        return self in (
+            TipoDeDecisao.CONFIRMAR,
+            TipoDeDecisao.DEVOLUCAO,
+            TipoDeDecisao.ERRO,
+            TipoDeDecisao.CONCILIADO_FORA,
+        )
+
+    @property
+    def classifica_credito_sem_titulo(self) -> bool:
+        return self in (TipoDeDecisao.ANTECIPACAO, TipoDeDecisao.DEVOLUCAO, TipoDeDecisao.ERRO)
 
 
 class Resposta(StrEnum):
@@ -135,6 +157,20 @@ class Franqueado:
 class PossivelDuplicidade:
     titulos: tuple[Titulo, ...]
     explicacao: str
+
+    @property
+    def chave(self) -> frozenset[tuple[str, str]]:
+        return frozenset((titulo.sistema_de_origem, titulo.documento) for titulo in self.titulos)
+
+
+@dataclass(frozen=True)
+class PagadorConhecido:
+    nome: str
+    franqueados: tuple[str, ...]
+
+    @property
+    def franqueado(self) -> str | None:
+        return self.franqueados[0] if len(self.franqueados) == 1 else None
 
 
 type ChaveNatural = tuple[str, str, date, Natureza, int, str, str, int]
@@ -231,6 +267,16 @@ class DecisaoRegistrada:
     evidencia: tuple[TipoDeEvidencia, ...]
     explicacao: str
     regra: RegraDaProposta | None
+    pareceres: tuple[ParecerSobreFranqueado, ...] = ()
+    franqueado: str | None = None
+    referencia: str | None = None
+
+
+@dataclass(frozen=True)
+class TituloACancelar:
+    item: str
+    titulo: Titulo
+    oficial: Titulo
 
 
 @dataclass(frozen=True)
@@ -247,6 +293,9 @@ class DecisoesLidas:
     confirmadas: int = 0
     rejeitadas: int = 0
     nao_aplicadas: tuple[str, ...] = ()
+    classificadas: int = 0
+    conciliados_fora: int = 0
+    duplicidades: int = 0
 
 
 @dataclass(frozen=True)
@@ -389,6 +438,8 @@ class Resultado:
     cobranca: tuple[TituloNaCobranca, ...]
     causa_raiz: CausaRaiz
     baixa_manual: tuple[BaixaManual, ...]
+    cancelar_na_origem: tuple[TituloACancelar, ...] = ()
+    conciliados_fora: tuple[Item, ...] = ()
 
     def _do_destino(self, destino: Destino) -> list[Item]:
         return [item for item in self.itens if item.destino is destino]

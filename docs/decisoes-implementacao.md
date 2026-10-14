@@ -372,3 +372,58 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** aba "Baixa manual no ERP", logo depois da Lista de baixa, com uma linha por Título confirmado nesta execução: Título, Sistema de origem, Franqueado, CNPJ, Vencimento, Valor principal, Encargo (o que o Crédito pagou acima do principal; zero em soma de Títulos e em Encargo não pago), Item, data, banco, conta e valor do Crédito. O Resumo ganha "Decisões lidas do Excel" (confirmadas, rejeitadas, não aplicadas) e uma linha "Decisão não aplicada" por aviso. O teste do comando que lista exatamente as abas passou a incluir a nova aba.
 - **Por quê:** a spec põe a lista do lote confirmado no mesmo workbook, e não é arquivo de importação (ADR 0002); a Analista precisa separar principal e Encargo ao baixar.
 - **Alternativas:** arquivo separado; acumular todas as confirmações ainda não baixadas (é o Aguardando baixa no ERP do ticket 14).
+
+## Ticket 13: como a Analista resolve a Fila no workbook
+
+- **Decisão:** a aba Fila de exceções ganha, no fim, as colunas Decisão, Títulos escolhidos, Franqueado do Conciliado fora (CNPJ) e Referência do Conciliado fora, todas vazias (a Fila não vem pré-preenchida). Para Crédito: "confirmar", "antecipação", "devolução", "erro" ou "conciliado fora"; para item de Título (Possível duplicidade): "mesma dívida" ou "dívidas distintas". A comparação ignora maiúsculas e acentos. Títulos escolhidos são escritos como na coluna Títulos sugeridos ("NF 1 (Protheus); NF 2 (Protheus)") ou só pelo documento, quando ele identifica um único Título; "confirmar" sem Títulos escolhidos confirma os Títulos sugeridos. Linha com Decisão vazia é ignorada. Valem as mesmas regras do ticket 12 (autor, execução do workbook, aviso no Resumo para o que não for aplicado), e o Resumo ganha as linhas "Fila resolvida pelo Excel", "Conciliado fora (na causa raiz)" e "Títulos a cancelar na origem". Confirmações da Fila entram na contagem de confirmadas.
+- **Por quê:** colunas no fim não mexem nas existentes; a Fila exige decisão ativa da Analista, ao contrário da Lista; confirmar o que foi sugerido é a mesma coisa que confirmar uma proposta da Lista.
+- **Alternativas:** aba própria de decisões da Fila; exigir sempre os Títulos escolhidos (uma digitação a mais para o caso comum).
+
+## Ticket 13: confirmação pela Fila segue o caminho da Lista
+
+- **Decisão:** a confirmação de um item da Fila grava uma decisão "confirmar" com os Títulos escolhidos, com o mesmo Encargo, a mesma saída na Baixa manual no ERP e o mesmo efeito do ticket 12: o Crédito deixa de ser vivo e os Títulos saem dos Títulos em aberto, inclusive em Diferença a menor. O Título precisa estar em aberto na execução do workbook (nem confirmado, nem cancelado na origem). Um Título usado por mais de uma decisão do mesmo workbook (confirmações da Lista, da Fila, ou Título que uma "mesma dívida" manda cancelar) faz com que nenhuma dessas decisões seja aplicada, com aviso.
+- **Por quê:** o ticket pede o mesmo caminho da Lista; Saldo parcial calculado pelas decisões é do ticket 14. Aplicar uma das decisões em disputa seria a plataforma escolher pela Analista.
+- **Alternativas:** manter o Título em aberto quando o Crédito é menor (antecipa o ticket 14); aplicar a primeira decisão do workbook.
+
+## Ticket 13: o que é confirmação por nome e qual é a chave do Pagador conhecido
+
+- **Decisão:** a chave do Pagador conhecido é o nome do pagador extraído do histórico pelo adaptador, normalizado como no Nome por prefixo, e não o histórico inteiro (PIX e TED do mesmo nome são o mesmo pagador). Toda confirmação (Lista ou Fila) de Crédito com nome grava um vínculo nome + Franqueado de cada Título confirmado, com a decisão de origem. O vínculo é "por nome" quando os Títulos são de um só Franqueado e o nome aponta para ele: é Nome por prefixo de um nome dele, a IA disse sim para ele ou o item já veio por Pagador conhecido dele. Um nome é Pagador conhecido quando tem algum vínculo por nome; ele vale enquanto todos os vínculos do nome apontam para o mesmo Franqueado. Confirmação de item só por valor ou por soma grava vínculo que não é por nome, então não cria regra. CPF e CNPJ de raiz desconhecida no histórico não viram Pagador conhecido neste ticket.
+- **Por quê:** o CONTEXT define Pagador conhecido como nome de extrato vinculado a um Franqueado e a spec fala em "nome igual a Pagador conhecido confirmado"; guardar os vínculos com a decisão permite ao ticket 14 desfazer o aprendizado na reversão. Gravar também os vínculos que não são por nome faz uma confirmação por valor para outro Franqueado desativar o nome, que é o lado conservador. Aprender documento a partir de confirmação de item só por valor contrariaria "confirmações por valor não criam regra".
+- **Alternativas:** chave pelo histórico completo (PIX e TED do mesmo pagador seriam pagadores diferentes); aprender de qualquer confirmação com nome; aprender CPF do histórico (história 13 da spec, que fica sem cobertura).
+- **Exemplo que sai da regra:** o ticket diz "mesmo histórico"; pela regra, "PIX RECEBIDO X" confirmado faz "TED RECEBIDA X" ir para a Lista também.
+
+## Ticket 13: Pagador conhecido no motor
+
+- **Decisão:** o Pagador conhecido é avaliado depois do nosso número e do CNPJ e antes do Nome por prefixo e da IA, com evidência "Pagador conhecido". Com Valor único (Título sozinho considerando o Encargo, ou uma única soma exata) entre os Títulos em aberto do Franqueado, vai para a Lista com a regra "nome de Pagador conhecido + Valor único" ou "+ soma exata"; senão segue os mesmos Motivos da identificação por CNPJ (Crédito sem título em aberto, mais de uma combinação possível, valor não fecha). Pares rejeitados e Título disputado na Lista continuam valendo. A IA não é chamada para nome que já é Pagador conhecido.
+- **Por quê:** é a regra da spec ("nome igual a Pagador conhecido confirmado + Valor único" e 1:N com Pagador conhecido); reutilizar o caminho do CNPJ mantém as duas identificações coerentes.
+- **Alternativas:** avaliar o Pagador conhecido antes do CNPJ (o documento é evidência mais forte que o nome).
+
+## Ticket 13: nome confirmado para mais de um Franqueado
+
+- **Decisão:** o nome com vínculos para mais de um Franqueado deixa de ser Pagador conhecido (a situação é derivada dos vínculos, não guardada). O Crédito com esse nome segue o caminho do Nome por prefixo ou da IA e nunca vai para a Lista; quando o Motivo seria "pagador provável, primeira vez", passa a ser "nome ambíguo", sem Franqueado na causa raiz e mantendo a sugestão; os outros Motivos seguem a precedência. A explicação cita as raízes para as quais o nome foi confirmado.
+- **Por quê:** "pagador provável, primeira vez" mede o que o aprendizado vai resolver (história 40), e esse nome não será aprendido; a ambiguidade é do nome. Derivar dos vínculos faz a reversão do ticket 14 reativar o nome sem regra extra.
+- **Alternativas:** marcar o nome como desativado para sempre numa tabela própria; manter "pagador provável, primeira vez".
+
+## Ticket 13: classificação do Crédito sem título em aberto
+
+- **Decisão:** "antecipação", "devolução" e "erro" só são aceitos para item com Motivo "Crédito sem título em aberto". Devolução e erro encerram o Crédito (deixa de ser vivo, como a confirmação). Antecipação registra a decisão e mantém o Crédito vivo e na Fila, retentado a cada importação, com a classificação na explicação; quando o Título aparece, ele casa normalmente.
+- **Por quê:** o CONTEXT diz que o Crédito sem título em aberto continua vivo para casar quando o Título aparecer, que é o caso da antecipação; tirá-lo da Fila sem destino quebraria a conferência de soma. Classificar outro Motivo seria decidir algo que o ticket não pede.
+- **Alternativas:** tirar a antecipação da Fila até o Título aparecer (exigiria um destino novo fora da conferência de soma); aceitar devolução e erro para qualquer Crédito.
+
+## Ticket 13: Conciliado fora
+
+- **Decisão:** "conciliado fora" vale para qualquer Crédito da Fila e exige o CNPJ (14 dígitos) ou a raiz (8 dígitos) do Franqueado, com ou sem pontuação, e uma referência livre; o Franqueado não precisa ter Título na plataforma. O Crédito deixa de ser vivo e sai da Fila, e passa a contar no relatório de causa raiz de todas as execuções seguintes, com o Motivo, banco e canal do item decidido e o Franqueado informado pela Analista. A conferência de soma não muda, porque o Crédito não é mais vivo.
+- **Por quê:** o Franqueado da terceira unidade pode não ter Títulos integrados; o relatório mede por que os Créditos não foram identificados, e o Franqueado dito pela Analista é o que importa para as ondas de migração. O relatório ainda não tem período, então o Crédito conta enquanto o relatório existir.
+- **Alternativas:** contar só na execução que aplicou a decisão (a contagem sumiria no dia seguinte); exigir Franqueado já conhecido; manter o Franqueado atribuído pelo motor.
+
+## Ticket 13: Possível duplicidade decidida
+
+- **Decisão:** "mesma dívida" exige escolher um só Título do grupo como oficial; os outros saem para sempre dos Títulos em aberto (motor e Lista de cobrança) e aparecem na nova aba "Cancelar na origem", logo depois de Baixa manual no ERP, enquanto ainda vierem na exportação. "Dívidas distintas" tira o item da Fila e devolve os Títulos à cobrança. Um grupo decidido não volta a virar item; se a composição do grupo mudar, é outro item. As decisões ficam numa tabela própria, com autor, momento e origem. O teste do comando que lista exatamente as abas passou a incluir a nova aba.
+- **Por quê:** o ticket pede a lista para cancelamento na origem; tirar o Título duplicado também do motor evita que um Crédito seja proposto para a cópia que vai ser cancelada. Depois de cancelado no Sistema de origem, o Título some da exportação e não há mais o que cancelar.
+- **Alternativas:** tirar o Título só da cobrança (o Crédito continuaria em "mais de uma combinação possível"); listar para sempre os Títulos cancelados.
+
+## Ticket 13: decisão registra o parecer da IA
+
+- **Decisão:** toda decisão sobre Crédito copia os pareceres do item (Franqueado, resposta, explicação, modelo e versão do prompt), em tabela própria. Substitui a observação do ticket 12 de que pareceres não eram copiados.
+- **Por quê:** a spec pede modelo e versão do prompt na decisão quando há parecer, e agora a Fila, que tem parecer, também é decidida.
+- **Alternativas:** guardar só modelo e versão do prompt (perderia a resposta que a Analista viu).

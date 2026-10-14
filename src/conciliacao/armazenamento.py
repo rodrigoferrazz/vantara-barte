@@ -2,6 +2,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from conciliacao.dominio import (
     Lancamento,
     MotivoDeNaoIdentificacao,
     Natureza,
+    PagadorConhecido,
     Parecer,
     ParecerSobreFranqueado,
     PossivelDuplicidade,
@@ -33,6 +35,7 @@ from conciliacao.dominio import (
     Resumo,
     TipoDeEvidencia,
     Titulo,
+    TituloACancelar,
     TituloNaCobranca,
     TotalDoDestino,
     UltimaDataDaConta,
@@ -159,6 +162,35 @@ CREATE TABLE IF NOT EXISTS avisos_das_decisoes (
     execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
     texto TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS decisoes_pareceres (
+    decisao_id INTEGER NOT NULL REFERENCES decisoes(id),
+    franqueado TEXT NOT NULL,
+    resposta TEXT NOT NULL,
+    explicacao TEXT NOT NULL,
+    modelo TEXT NOT NULL,
+    versao_do_prompt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisoes_conciliado_fora (
+    decisao_id INTEGER NOT NULL UNIQUE REFERENCES decisoes(id),
+    franqueado TEXT NOT NULL,
+    referencia TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pagadores_conhecidos (
+    decisao_id INTEGER NOT NULL REFERENCES decisoes(id),
+    nome TEXT NOT NULL,
+    franqueado TEXT NOT NULL,
+    por_nome INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisoes_de_duplicidade (
+    id INTEGER PRIMARY KEY,
+    item_de_titulo_id INTEGER NOT NULL REFERENCES itens_de_titulo(id),
+    execucao_que_aplicou INTEGER REFERENCES execucoes(id),
+    tipo TEXT NOT NULL,
+    titulo_oficial_id INTEGER REFERENCES titulos(id),
+    autor TEXT NOT NULL,
+    momento TEXT NOT NULL,
+    origem TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cobranca_creditos_candidatos (
     cobranca_id INTEGER NOT NULL REFERENCES cobranca(id),
     lancamento_id INTEGER NOT NULL REFERENCES lancamentos(id)
@@ -214,12 +246,58 @@ class Armazenamento:
         return identificadores, novos
 
     def creditos_vivos(self) -> dict[int, Lancamento]:
+        encerram = [tipo.value for tipo in TipoDeDecisao if tipo.encerra_o_credito]
         linhas = self._conexao.execute(
             f"SELECT id, {_COLUNAS_LANCAMENTO} FROM lancamentos WHERE natureza = ?"
-            " AND id NOT IN (SELECT lancamento_id FROM decisoes WHERE tipo = ?) ORDER BY data, id",
-            (Natureza.CREDITO.value, TipoDeDecisao.CONFIRMAR.value),
+            f" AND id NOT IN (SELECT lancamento_id FROM decisoes WHERE tipo IN ({_marcadores(encerram)}))"
+            " ORDER BY data, id",
+            (Natureza.CREDITO.value, *encerram),
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
+
+    def antecipacoes(self) -> dict[ChaveNatural, datetime]:
+        linhas = self._conexao.execute(
+            f"SELECT d.momento, {_COLUNAS_DO_LANCAMENTO_L} FROM decisoes d JOIN lancamentos l ON l.id = d.lancamento_id"
+            " WHERE d.tipo = ? ORDER BY d.id",
+            (TipoDeDecisao.ANTECIPACAO.value,),
+        )
+        return {_lancamento(lancamento).chave_natural: datetime.fromisoformat(momento) for momento, *lancamento in linhas}
+
+    def titulos_da_execucao(self, execucao: int) -> list[Titulo]:
+        linhas = self._conexao.execute(
+            f"SELECT {_COLUNAS_TITULO} FROM titulos t WHERE t.execucao_id = ? ORDER BY t.id", (execucao,)
+        )
+        return [_titulo(linha) for linha in linhas]
+
+    def titulos_cancelados_na_origem(self) -> set[tuple[str, str]]:
+        return {
+            (cancelado.sistema_de_origem, cancelado.documento)
+            for _, titulos, oficial in self._mesmas_dividas()
+            for cancelado in titulos
+            if cancelado != oficial
+        }
+
+    def duplicidades_decididas(self) -> set[frozenset[tuple[str, str]]]:
+        linhas = self._conexao.execute("SELECT item_de_titulo_id FROM decisoes_de_duplicidade").fetchall()
+        return {
+            frozenset((t.sistema_de_origem, t.documento) for t in self._titulos_ligados("itens_de_titulo_titulos", item))
+            for (item,) in linhas
+        }
+
+    def pagadores_conhecidos(self) -> list[PagadorConhecido]:
+        linhas = self._conexao.execute(
+            "SELECT p.nome, p.franqueado, MAX(p.por_nome) FROM pagadores_conhecidos p"
+            " JOIN decisoes d ON d.id = p.decisao_id WHERE d.tipo = ?"
+            " GROUP BY p.nome, p.franqueado ORDER BY p.nome, p.franqueado",
+            (TipoDeDecisao.CONFIRMAR.value,),
+        )
+        franqueados: dict[str, list[str]] = defaultdict(list)
+        por_nome: set[str] = set()
+        for nome, franqueado, confirmado_por_nome in linhas:
+            franqueados[nome].append(franqueado)
+            if confirmado_por_nome:
+                por_nome.add(nome)
+        return [PagadorConhecido(nome, tuple(f)) for nome, f in franqueados.items() if nome in por_nome]
 
     def ultima_execucao(self) -> int | None:
         (execucao,) = self._conexao.execute("SELECT MAX(id) FROM execucoes").fetchone()
@@ -232,6 +310,16 @@ class Armazenamento:
             (TipoDeDecisao.CONFIRMAR.value,),
         )
         return {(sistema, documento) for sistema, documento in linhas}
+
+    def _mesmas_dividas(self, ate_a_execucao: int | None = None) -> Iterator[tuple[int, tuple[Titulo, ...], Titulo]]:
+        filtro = " AND dd.execucao_que_aplicou <= ?" if ate_a_execucao is not None else ""
+        linhas = self._conexao.execute(
+            "SELECT it.duplicidade_id, dd.item_de_titulo_id, dd.titulo_oficial_id FROM decisoes_de_duplicidade dd"
+            f" JOIN itens_de_titulo it ON it.id = dd.item_de_titulo_id WHERE dd.tipo = ?{filtro} ORDER BY dd.id",
+            (TipoDeDecisao.MESMA_DIVIDA.value, *(() if ate_a_execucao is None else (ate_a_execucao,))),
+        ).fetchall()
+        for duplicidade, item, oficial in linhas:
+            yield duplicidade, self._titulos_ligados("itens_de_titulo_titulos", item), self._titulo(oficial)
 
     def pares_rejeitados(self) -> list[ParRejeitado]:
         linhas = self._conexao.execute(
@@ -273,23 +361,77 @@ class Armazenamento:
             " WHERE item_id = ? ORDER BY rowid",
             (decisao, item_id),
         )
-        titulos = self._conexao.execute(
-            "SELECT t.id, t.sistema_de_origem, t.documento FROM itens_titulos it JOIN titulos t ON t.id = it.titulo_id"
-            " WHERE it.item_id = ? ORDER BY t.id",
-            (item_id,),
-        ).fetchall()
+        self._conexao.execute(
+            "INSERT INTO decisoes_pareceres (decisao_id, franqueado, resposta, explicacao, modelo, versao_do_prompt)"
+            " SELECT ?, franqueado, resposta, explicacao, modelo, versao_do_prompt FROM itens_pareceres"
+            " WHERE item_id = ? ORDER BY rowid",
+            (decisao, item_id),
+        )
         self._conexao.executemany(
             "INSERT INTO decisoes_titulos (decisao_id, titulo_id, encargo_centavos) VALUES (?, ?, ?)",
-            [(decisao, titulo_id, encargos[(sistema, documento)]) for titulo_id, sistema, documento in titulos],
+            [
+                (decisao, self._id_do_titulo(execucao, sistema, documento), encargo)
+                for (sistema, documento), encargo in encargos.items()
+            ],
         )
         return decisao
 
+    def registrar_conciliado_fora(self, decisao: int, franqueado: str, referencia: str) -> None:
+        self._conexao.execute(
+            "INSERT INTO decisoes_conciliado_fora (decisao_id, franqueado, referencia) VALUES (?, ?, ?)",
+            (decisao, franqueado, referencia),
+        )
+
+    def registrar_vinculo_de_pagador(self, decisao: int, nome: str, franqueado: str, por_nome: bool) -> None:
+        self._conexao.execute(
+            "INSERT INTO pagadores_conhecidos (decisao_id, nome, franqueado, por_nome) VALUES (?, ?, ?, ?)",
+            (decisao, nome, franqueado, int(por_nome)),
+        )
+
+    def registrar_decisao_de_duplicidade(
+        self,
+        execucao: int,
+        item: str,
+        tipo: TipoDeDecisao,
+        oficial: tuple[str, str] | None,
+        autor: str,
+        momento: datetime,
+        origem: str,
+    ) -> int:
+        (item_id,) = self._conexao.execute(
+            "SELECT id FROM itens_de_titulo WHERE execucao_id = ? AND duplicidade_id = ?",
+            (execucao, _duplicidade_do_item(item)),
+        ).fetchone()
+        decisao = self._conexao.execute(
+            "INSERT INTO decisoes_de_duplicidade (item_de_titulo_id, tipo, titulo_oficial_id, autor, momento, origem)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                item_id,
+                tipo.value,
+                self._id_do_titulo(execucao, *oficial) if oficial else None,
+                autor,
+                momento.isoformat(),
+                origem,
+            ),
+        ).lastrowid
+        assert decisao is not None
+        return decisao
+
+    def _id_do_titulo(self, execucao: int, sistema: str, documento: str) -> int:
+        (titulo_id,) = self._conexao.execute(
+            "SELECT MIN(id) FROM titulos WHERE execucao_id = ? AND sistema_de_origem = ? AND documento = ?",
+            (execucao, sistema, documento),
+        ).fetchone()
+        assert titulo_id is not None
+        return int(titulo_id)
+
     def decisoes(self) -> tuple[DecisaoRegistrada, ...]:
         linhas = self._conexao.execute(
-            "SELECT id, lancamento_id, execucao_do_item, tipo, motivo, autor, momento, origem, explicacao, regra"
-            " FROM decisoes ORDER BY id"
+            "SELECT d.id, d.lancamento_id, d.execucao_do_item, d.tipo, d.motivo, d.autor, d.momento, d.origem,"
+            " d.explicacao, d.regra, f.franqueado, f.referencia FROM decisoes d"
+            " LEFT JOIN decisoes_conciliado_fora f ON f.decisao_id = d.id ORDER BY d.id"
         ).fetchall()
-        return tuple(
+        dos_creditos = tuple(
             DecisaoRegistrada(
                 item=_identificador_do_item(lancamento_id),
                 tipo=TipoDeDecisao(tipo),
@@ -307,9 +449,47 @@ class Armazenamento:
                 ),
                 explicacao=explicacao,
                 regra=RegraDaProposta(regra) if regra else None,
+                pareceres=self._pareceres("decisoes_pareceres", "decisao_id", decisao),
+                franqueado=franqueado,
+                referencia=referencia,
             )
-            for decisao, lancamento_id, execucao, tipo, motivo, autor, momento, origem, explicacao, regra in linhas
+            for (
+                decisao,
+                lancamento_id,
+                execucao,
+                tipo,
+                motivo,
+                autor,
+                momento,
+                origem,
+                explicacao,
+                regra,
+                franqueado,
+                referencia,
+            ) in linhas
         )
+        return dos_creditos + tuple(self._decisoes_de_duplicidade())
+
+    def _decisoes_de_duplicidade(self) -> Iterator[DecisaoRegistrada]:
+        linhas = self._conexao.execute(
+            "SELECT it.duplicidade_id, it.execucao_id, it.explicacao, dd.tipo, dd.titulo_oficial_id, dd.autor,"
+            " dd.momento, dd.origem FROM decisoes_de_duplicidade dd JOIN itens_de_titulo it ON it.id = dd.item_de_titulo_id"
+            " ORDER BY dd.id"
+        ).fetchall()
+        for duplicidade, execucao, explicacao, tipo, oficial, autor, momento, origem in linhas:
+            yield DecisaoRegistrada(
+                item=_identificador_da_duplicidade(duplicidade),
+                tipo=TipoDeDecisao(tipo),
+                motivo=None,
+                autor=autor,
+                momento=datetime.fromisoformat(momento),
+                origem=origem,
+                execucao=execucao,
+                titulos=(self._titulo(oficial),) if oficial is not None else (),
+                evidencia=(),
+                explicacao=explicacao,
+                regra=None,
+            )
 
     def ultimas_datas(self) -> dict[tuple[str, str], date]:
         linhas = self._conexao.execute("SELECT banco, conta, MAX(data) FROM lancamentos GROUP BY banco, conta")
@@ -337,6 +517,7 @@ class Armazenamento:
         cobranca: Iterable[tuple[TituloNaCobranca, tuple[int, ...]]],
         decisoes_aplicadas: Iterable[int],
         avisos_das_decisoes: Iterable[str],
+        decisoes_de_duplicidade_aplicadas: Iterable[int] = (),
     ) -> int:
         cursor = self._conexao.execute(
             "INSERT INTO execucoes (momento, lancamentos_novos) VALUES (?, ?)",
@@ -352,6 +533,10 @@ class Armazenamento:
         self._conexao.executemany(
             "UPDATE decisoes SET execucao_que_aplicou = ? WHERE id = ?",
             [(execucao, decisao) for decisao in decisoes_aplicadas],
+        )
+        self._conexao.executemany(
+            "UPDATE decisoes_de_duplicidade SET execucao_que_aplicou = ? WHERE id = ?",
+            [(execucao, decisao) for decisao in decisoes_de_duplicidade_aplicadas],
         )
         self._conexao.executemany(
             "INSERT INTO avisos_das_decisoes (execucao_id, texto) VALUES (?, ?)",
@@ -461,7 +646,8 @@ class Armazenamento:
         arquivos = self._conexao.execute(
             "SELECT nome, motivo_da_recusa FROM arquivos WHERE execucao_id = ? ORDER BY nome", (execucao,)
         ).fetchall()
-        itens = tuple(self._itens(execucao))
+        itens = tuple(self._itens("i.execucao_id = ?", (execucao,)))
+        conciliados_fora = tuple(self._conciliados_fora(execucao))
         totais = {
             destino: TotalDoDestino(
                 quantidade=sum(1 for item in itens if item.destino is destino),
@@ -486,11 +672,32 @@ class Armazenamento:
             itens_de_titulo=tuple(self._itens_de_titulo(execucao)),
             cobranca=tuple(self._cobranca(execucao)),
             causa_raiz=CausaRaiz.da_fila(
-                (item for item in itens if item.destino is Destino.FILA_DE_EXCECOES),
+                (*(item for item in itens if item.destino is Destino.FILA_DE_EXCECOES), *conciliados_fora),
                 {raiz: franqueado.todos_os_nomes for raiz, franqueado in self.franqueados().items()},
             ),
             baixa_manual=tuple(self._baixa_manual(execucao)),
+            cancelar_na_origem=tuple(self._cancelar_na_origem(execucao)),
+            conciliados_fora=conciliados_fora,
         )
+
+    def _conciliados_fora(self, execucao: int) -> Iterator[Item]:
+        linhas = self._conexao.execute(
+            "SELECT d.execucao_do_item, d.lancamento_id, f.franqueado FROM decisoes d"
+            " JOIN decisoes_conciliado_fora f ON f.decisao_id = d.id"
+            " WHERE d.tipo = ? AND d.execucao_que_aplicou <= ? ORDER BY d.id",
+            (TipoDeDecisao.CONCILIADO_FORA.value, execucao),
+        ).fetchall()
+        for execucao_do_item, lancamento_id, franqueado in linhas:
+            [item] = self._itens("i.execucao_id = ? AND i.lancamento_id = ?", (execucao_do_item, lancamento_id))
+            yield replace(item, franqueado=franqueado)
+
+    def _cancelar_na_origem(self, execucao: int) -> Iterator[TituloACancelar]:
+        na_exportacao = {(t.sistema_de_origem, t.documento): t for t in self.titulos_da_execucao(execucao)}
+        for duplicidade, titulos, oficial in self._mesmas_dividas(ate_a_execucao=execucao):
+            for titulo in titulos:
+                atual = na_exportacao.get((titulo.sistema_de_origem, titulo.documento))
+                if titulo != oficial and atual is not None:
+                    yield TituloACancelar(_identificador_da_duplicidade(duplicidade), atual, oficial)
 
     def _decisoes_lidas(self, execucao: int) -> DecisoesLidas:
         tipos = Counter(
@@ -502,10 +709,16 @@ class Armazenamento:
         avisos = self._conexao.execute(
             "SELECT texto FROM avisos_das_decisoes WHERE execucao_id = ? ORDER BY rowid", (execucao,)
         )
+        (duplicidades,) = self._conexao.execute(
+            "SELECT COUNT(*) FROM decisoes_de_duplicidade WHERE execucao_que_aplicou = ?", (execucao,)
+        ).fetchone()
         return DecisoesLidas(
             confirmadas=tipos[TipoDeDecisao.CONFIRMAR],
             rejeitadas=tipos[TipoDeDecisao.REJEITAR],
             nao_aplicadas=tuple(texto for (texto,) in avisos),
+            classificadas=sum(n for tipo, n in tipos.items() if tipo.classifica_credito_sem_titulo),
+            conciliados_fora=tipos[TipoDeDecisao.CONCILIADO_FORA],
+            duplicidades=duplicidades,
         )
 
     def _baixa_manual(self, execucao: int) -> Iterator[BaixaManual]:
@@ -560,23 +773,23 @@ class Armazenamento:
         ).fetchall()
         for item_id, duplicidade_id, explicacao, motivo in linhas:
             yield ItemDeTitulo(
-                identificador=f"D{duplicidade_id}",
+                identificador=_identificador_da_duplicidade(duplicidade_id),
                 titulos=self._titulos_ligados("itens_de_titulo_titulos", item_id),
                 explicacao=explicacao,
                 motivo=MotivoDeNaoIdentificacao(motivo),
             )
 
-    def _itens(self, execucao: int) -> Iterator[Item]:
+    def _itens(self, filtro: str, parametros: tuple[object, ...]) -> list[Item]:
         linhas = self._conexao.execute(
             "SELECT i.id, i.lancamento_id, i.destino, i.explicacao, i.motivo, r.regra, a.franqueado, a.canal,"
             f" {_COLUNAS_LANCAMENTO} FROM itens i JOIN lancamentos l ON l.id = i.lancamento_id"
             " LEFT JOIN itens_atribuicoes a ON a.item_id = i.id LEFT JOIN itens_regras r ON r.item_id = i.id"
-            " WHERE i.execucao_id = ?"
+            f" WHERE {filtro}"
             " ORDER BY l.data, l.id",
-            (execucao,),
+            parametros,
         ).fetchall()
-        for item_id, lancamento_id, destino, explicacao, motivo, regra, franqueado, canal, *lancamento in linhas:
-            yield Item(
+        return [
+            Item(
                 identificador=_identificador_do_item(lancamento_id),
                 destino=Destino(destino),
                 lancamento=_lancamento(lancamento),
@@ -584,17 +797,19 @@ class Armazenamento:
                 explicacao=explicacao,
                 motivo=MotivoDeNaoIdentificacao(motivo) if motivo else None,
                 evidencia=self._evidencia(item_id),
-                pareceres=self._pareceres(item_id),
+                pareceres=self._pareceres("itens_pareceres", "item_id", item_id),
                 franqueado=franqueado,
                 canal=Canal(canal) if canal else None,
                 regra=RegraDaProposta(regra) if regra else None,
             )
+            for item_id, lancamento_id, destino, explicacao, motivo, regra, franqueado, canal, *lancamento in linhas
+        ]
 
-    def _pareceres(self, item_id: int) -> tuple[ParecerSobreFranqueado, ...]:
+    def _pareceres(self, tabela: str, coluna: str, chave: int) -> tuple[ParecerSobreFranqueado, ...]:
         linhas = self._conexao.execute(
-            "SELECT franqueado, resposta, explicacao, modelo, versao_do_prompt FROM itens_pareceres"
-            " WHERE item_id = ? ORDER BY rowid",
-            (item_id,),
+            f"SELECT franqueado, resposta, explicacao, modelo, versao_do_prompt FROM {tabela}"
+            f" WHERE {coluna} = ? ORDER BY rowid",
+            (chave,),
         )
         return tuple(
             ParecerSobreFranqueado(franqueado, Parecer(Resposta(resposta), explicacao, modelo, versao))
@@ -642,6 +857,22 @@ def _identificador_do_item(lancamento_id: int) -> str:
 def _lancamento_do_item(identificador: str) -> int:
     assert identificador.startswith(_PREFIXO_DO_ITEM)
     return int(identificador.removeprefix(_PREFIXO_DO_ITEM))
+
+
+_PREFIXO_DA_DUPLICIDADE = "D"
+
+
+def _identificador_da_duplicidade(duplicidade_id: int) -> str:
+    return f"{_PREFIXO_DA_DUPLICIDADE}{duplicidade_id}"
+
+
+def _duplicidade_do_item(identificador: str) -> int:
+    assert identificador.startswith(_PREFIXO_DA_DUPLICIDADE)
+    return int(identificador.removeprefix(_PREFIXO_DA_DUPLICIDADE))
+
+
+def _marcadores(valores: list[str]) -> str:
+    return ", ".join("?" for _ in valores)
 
 
 def _parametros_da_chave(chave: ChaveNatural) -> tuple[object, ...]:
