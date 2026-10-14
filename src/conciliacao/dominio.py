@@ -6,7 +6,7 @@ from enum import StrEnum
 from fractions import Fraction
 from typing import ClassVar
 
-from conciliacao.normalizacao import formatar_percentual, raiz_do_cnpj
+from conciliacao.normalizacao import formatar_percentual, formatar_reais, raiz_do_cnpj
 
 
 class Destino(StrEnum):
@@ -237,6 +237,19 @@ class VinculoDeCobranca:
 
 
 @dataclass(frozen=True)
+class ComponentesDoValor:
+    principal_centavos: int
+    multa_centavos: int
+    juros_centavos: int
+
+    def descrever(self) -> str:
+        return (
+            f"principal {formatar_reais(self.principal_centavos)}, multa {formatar_reais(self.multa_centavos)} "
+            f"e juros {formatar_reais(self.juros_centavos)}"
+        )
+
+
+@dataclass(frozen=True)
 class RetornoDeCobranca:
     tipo: TipoDeIdentificador
     chave_natural: str
@@ -245,6 +258,7 @@ class RetornoDeCobranca:
     conta: str
     data: date
     valor_centavos: int
+    componentes: ComponentesDoValor | None = None
 
     @property
     def chave_do_identificador(self) -> ChaveDoIdentificador:

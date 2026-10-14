@@ -106,6 +106,7 @@ class _Titulos:
     retornos: Mapping[ChaveNatural, RetornoDeCobranca]
     vinculos: Mapping[ChaveDoIdentificador, VinculoDeCobranca]
     por_chave: dict[tuple[str, str], Titulo]
+    titulos_rejeitados: frozenset[tuple[str, str]]
 
     @property
     def franqueados(self) -> set[str]:
@@ -193,7 +194,7 @@ def conciliar(
     nomes = _nomes_dos_franqueados(franqueados, todos)
     conhecidos = {pagador.nome: pagador for pagador in pagadores_conhecidos}
 
-    def abertos(titulos: list[Titulo]) -> _Titulos:
+    def abertos(titulos: list[Titulo], titulos_rejeitados: frozenset[tuple[str, str]] = frozenset()) -> _Titulos:
         por_nosso_numero: dict[str, list[Titulo]] = defaultdict(list)
         por_franqueado: dict[str, list[Titulo]] = defaultdict(list)
         for titulo in titulos:
@@ -213,6 +214,7 @@ def conciliar(
             retornos,
             vinculos,
             {(titulo.sistema_de_origem, titulo.documento): titulo for titulo in titulos},
+            titulos_rejeitados,
         )
 
     rejeitados: dict[ChaveNatural, list[ParRejeitado]] = defaultdict(list)
@@ -225,7 +227,8 @@ def conciliar(
         if not pares:
             return _classificar(lancamento, todos_abertos)
         restantes = [titulo for titulo in todos if not any(par.rejeita(titulo) for par in pares)]
-        return _apos_rejeicao(_classificar(lancamento, abertos(restantes)), pares)
+        sem_os_rejeitados = abertos(restantes, frozenset((par.sistema_de_origem, par.documento) for par in pares))
+        return _apos_rejeicao(_classificar(lancamento, sem_os_rejeitados), pares)
 
     classificacoes = _sem_titulo_disputado_na_lista(
         [_com_canal(classificar(lancamento), canal_do_credito) for lancamento in lancamentos]
@@ -422,8 +425,23 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
             titulos=(),
             explicacao="Débito do Extrato; não é Crédito de Franqueado.",
         )
-    if identificado := _por_identificador(lancamento, abertos):
-        return identificado
+    retorno = abertos.retornos.get(lancamento.chave_natural)
+    if retorno is None:
+        return _sem_identificador_de_cobranca(lancamento, abertos)
+    vinculo = abertos.vinculos.get(retorno.chave_do_identificador)
+    if vinculo is None:
+        sem_vinculo = _sem_identificador_de_cobranca(lancamento, abertos)
+        return replace(
+            sem_vinculo,
+            explicacao=f"{sem_vinculo.explicacao} O {retorno.tipo.value} {retorno.identificador} do Retorno de cobrança "
+            "não tem vínculo na plataforma; o Crédito segue sem Identificador de cobrança.",
+        )
+    if (vinculo.sistema_de_origem, vinculo.documento) in abertos.titulos_rejeitados:
+        return _sem_identificador_de_cobranca(lancamento, abertos)
+    return _por_identificador(lancamento, retorno, vinculo, abertos)
+
+
+def _sem_identificador_de_cobranca(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
     candidatos = abertos.por_nosso_numero.get(lancamento.documento, []) if lancamento.documento else []
     if len(candidatos) == 1:
         return _por_nosso_numero(lancamento, candidatos[0], abertos.encargo)
@@ -829,19 +847,35 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
     )
 
 
-def _por_identificador(lancamento: Lancamento, abertos: _Titulos) -> Classificacao | None:
-    retorno = abertos.retornos.get(lancamento.chave_natural)
-    vinculo = abertos.vinculos.get(retorno.chave_do_identificador) if retorno else None
-    titulo = abertos.por_chave.get((vinculo.sistema_de_origem, vinculo.documento)) if vinculo else None
-    if vinculo is None or titulo is None:
-        return None
-    return _pelo_titulo_apontado(
+def _por_identificador(
+    lancamento: Lancamento, retorno: RetornoDeCobranca, vinculo: VinculoDeCobranca, abertos: _Titulos
+) -> Classificacao:
+    titulo = abertos.por_chave.get((vinculo.sistema_de_origem, vinculo.documento))
+    if titulo is None:
+        return Classificacao(
+            lancamento=lancamento,
+            destino=Destino.FILA_DE_EXCECOES,
+            titulos=(),
+            explicacao=f"{vinculo.descrever()} é do Título {vinculo.documento} ({vinculo.sistema_de_origem}), que não "
+            "está em aberto: pode ser pagamento em duplicidade. O Identificador de cobrança aponta um único Título, "
+            "então nenhum outro é procurado.",
+            motivo=MotivoDeNaoIdentificacao.CREDITO_SEM_TITULO_EM_ABERTO,
+            evidencia=(TipoDeEvidencia.IDENTIFICADOR_DE_COBRANCA,),
+            franqueado=raiz_do_cnpj(vinculo.cnpj),
+        )
+    classificacao = _pelo_titulo_apontado(
         lancamento,
         titulo,
         vinculo.descrever(),
         TipoDeEvidencia.IDENTIFICADOR_DE_COBRANCA,
         RegraDaProposta.IDENTIFICADOR_E_VALOR,
         abertos.encargo,
+    )
+    if retorno.componentes is None:
+        return classificacao
+    return replace(
+        classificacao,
+        explicacao=f"{classificacao.explicacao} O Retorno de cobrança separa {retorno.componentes.descrever()}.",
     )
 
 

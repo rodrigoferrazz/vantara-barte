@@ -720,3 +720,34 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** a emissão deixa de fora os Títulos de toda Possível duplicidade entre sistemas ainda sem decisão da Analista, pelo mesmo critério da Lista de cobrança: as Possíveis duplicidades calculadas sobre a última exportação sem os Títulos cancelados na origem, menos as já decididas (`possiveis_duplicidades_nao_decididas`, agora usada pela execução e pela emissão). Decidida a duplicidade, os Títulos voltam a ser emitidos na próxima emissão: com "dívidas distintas", os dois; com "mesma dívida", só o oficial, porque o outro passa a ser cancelado na origem.
 - **Por quê:** decisão do usuário. Emitir os dois Títulos de uma possível mesma dívida pode cobrar duas vezes o Franqueado; a Lista de cobrança da fase 1 já os deixa de fora pelo mesmo motivo (ver comentário no ticket 01 da fase 2).
 - **Alternativas:** emitir os dois, como a regra de emissão da spec dizia (cobrança em dobro); emitir só um deles (seria decidir pela Analista qual é o oficial).
+
+## Fase 2, ticket 02: identificador desconhecido segue a fase 1
+
+- **Decisão:** Crédito enriquecido com um Identificador de cobrança sem vínculo na plataforma segue exatamente o caminho da fase 1 (mesmo destino, Motivo, Títulos e evidência). A explicação ganha só uma frase final dizendo que o txid do Retorno não tem vínculo na plataforma. O motor não atribui "Possível fonte não integrada": esse Motivo continua sendo só classificação da Analista (correção "Possível fonte não integrada classificada pela Analista"), que pode usá-lo para esse Crédito pela Fila. O mesmo vale para o identificador que aponta Título fora dos em aberto: ele recebe "Crédito sem título em aberto" (seção seguinte), nunca "Possível fonte não integrada".
+- **Por quê:** decisão do usuário, contra a história 28 e o módulo 8 da spec, que mandavam o identificador desconhecido para a Fila com "Possível fonte não integrada". A frase na explicação não muda nenhuma regra e dá à Analista o sinal de cobrança emitida fora da plataforma.
+- **Alternativas:** "Possível fonte não integrada" pelo motor, como a spec dizia (contra a decisão do usuário); seguir a fase 1 sem citar o identificador (a Analista perderia a pista).
+
+## Fase 2, ticket 02: identificador de Título fora dos em aberto
+
+- **Decisão:** quando o vínculo do identificador aponta um Título que não está entre os em aberto da execução (sumiu da exportação, tem Saldo zero ou foi cancelado na origem por mesma dívida), o Crédito vai para a Fila com "Crédito sem título em aberto", sem Título candidato, com evidência "Identificador de cobrança", o Franqueado do vínculo e a explicação citando o identificador e o Título. Nenhum outro Título do Franqueado é procurado, nem sozinho nem em soma. Como todo Crédito sem título em aberto, ele continua vivo e é retentado a cada importação.
+- **Por quê:** spec, história 27 e módulo 8 ("um identificador aponta um único Título; o motor não procura soma para Crédito identificado"). Pela definição do CONTEXT.md, o Crédito é de Franqueado identificado e não tem Título candidato, porque o único que o identificador admite não está em aberto.
+- **Alternativas:** cair no caminho da fase 1 pelo pagador (poderia propor outro Título para um pagamento em duplicidade); apontar o Título baixado como candidato (ele não está em aberto e iria para "em análise").
+
+## Fase 2, ticket 02: proposta do identificador rejeitada
+
+- **Decisão:** se a Analista rejeita a proposta de um Crédito identificado para o Título do vínculo, o Crédito passa a seguir o caminho da fase 1 sem esse Título, como acontece com o nosso número do Protheus, e cai na Fila pela regra da rejeição da fase 1. Não vira "Crédito sem título em aberto" por causa do identificador.
+- **Por quê:** a rejeição tira o par Crédito-Título do motor na fase 1; o Título continua em aberto, então tratar o identificador como "Título fora dos em aberto" diria algo falso. Seguir a fase 1 é o mesmo tratamento do nosso número.
+- **Alternativas:** manter o identificador e mandar para a Fila apontando o Título rejeitado (ignoraria a rejeição); "Crédito sem título em aberto" (o Título está em aberto).
+
+## Fase 2, ticket 02: componentes do valor do Pix
+
+- **Decisão:** o adaptador de Pix recebidos passa a ler `componentesValor`: objeto com só os componentes da API Pix (`original`, `saque`, `troco`, `juros`, `multa`, `abatimento`, `desconto`), `original` obrigatório e cada componente com `valor` no formato `1234.56`; fora disso o arquivo é recusado com o motivo. O Retorno guarda principal (`original`), multa e juros (zero quando o componente não vem), em colunas novas da tabela de Retornos. Quando o Crédito identificado tem esses componentes, a explicação termina com "O Retorno de cobrança separa principal ..., multa ... e juros ...". A regra de valor não usa os componentes: o valor do Crédito continua passando pelo Encargo da fase 1, e sem componentes a explicação fica com o principal e o Encargo calculados.
+- **Por quê:** história 26 e o critério do ticket (componentes "quando o Retorno separa"); a spec diz que o identificador não muda a regra de valor. Os componentes ficam no Retorno porque são dado dele, não da ligação com o Crédito.
+- **Alternativas:** guardar os componentes na tabela de enriquecimentos, como sugere o módulo 11 (o Retorno sem Crédito perderia os componentes até ser ligado); usar os componentes para decidir o Encargo (contra a spec).
+- **Ponto em aberto:** as colunas novas entram no `CREATE TABLE` da tabela de Retornos criada no ticket 01, sem migração. Um `conciliacao.sqlite` criado com o código do ticket 01 e com `[migracao]` ligada precisa ser recriado; a tabela ainda não saiu desta branch.
+
+## Fase 2, ticket 02: Pagador conhecido e identificador
+
+- **Decisão:** nada muda no código: a confirmação de um Crédito com evidência só de Identificador de cobrança registra o nome do Extrato como as confirmações por CNPJ da fase 1, sem "por nome", e por isso nunca cria Pagador conhecido.
+- **Por quê:** história 30 e fase 1, história 57; o teste fixa o comportamento.
+- **Alternativas:** não registrar nada para o identificador (deixaria de marcar o nome como confirmado para mais de um Franqueado quando ele também paga outro).

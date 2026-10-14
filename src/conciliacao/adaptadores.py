@@ -12,6 +12,7 @@ from conciliacao.dominio import (
     ArquivoRecusado,
     Canal,
     ChaveNatural,
+    ComponentesDoValor,
     Lancamento,
     Natureza,
     RetornoDeCobranca,
@@ -171,6 +172,7 @@ class PixRecebidos:
         {"endToEndId", "txid", "valor", "componentesValor", "chave", "horario", "infoPagador", "devolucoes", "pagador"}
     )
     campos_obrigatorios = ("endToEndId", "valor", "horario")
+    componentes_do_valor = frozenset({"original", "saque", "troco", "juros", "multa", "abatimento", "desconto"})
     formato_do_txid = re.compile(r"[a-zA-Z0-9]{1,35}")
 
     def reconhece(self, conteudo: object) -> TypeGuard[dict[str, object]]:
@@ -207,9 +209,31 @@ class PixRecebidos:
                     conta=conta.conta,
                     data=_formato(numero, data_do_horario, recebido["horario"], local="pix"),
                     valor_centavos=_formato(numero, centavos_de_valor_com_ponto, recebido["valor"], local="pix"),
+                    componentes=self._componentes(numero, recebido.get("componentesValor")),
                 )
             )
         return ConteudoDoArquivo(retornos=retornos)
+
+    def _componentes(self, numero: int, componentes: object) -> ComponentesDoValor | None:
+        if componentes is None:
+            return None
+        if not isinstance(componentes, dict):
+            raise Recusa(f"pix {numero}: 'componentesValor' não é um objeto")
+        desconhecidos = sorted(set(componentes) - self.componentes_do_valor)
+        if desconhecidos:
+            raise Recusa(f"pix {numero}: componente de valor desconhecido {_colunas(desconhecidos)}")
+        if "original" not in componentes:
+            raise Recusa(f"pix {numero}: 'componentesValor' sem o componente 'original'")
+        valores = {}
+        for nome, componente in componentes.items():
+            if not (isinstance(componente, dict) and isinstance(componente.get("valor"), str)):
+                raise Recusa(f"pix {numero}: componente '{nome}' sem 'valor'")
+            valores[nome] = _formato(numero, centavos_de_valor_com_ponto, componente["valor"], local="pix")
+        return ComponentesDoValor(
+            principal_centavos=valores["original"],
+            multa_centavos=valores.get("multa", 0),
+            juros_centavos=valores.get("juros", 0),
+        )
 
 
 PIX_RECEBIDOS = PixRecebidos()

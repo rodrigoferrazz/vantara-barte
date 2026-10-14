@@ -1,12 +1,14 @@
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from conciliacao.configuracao import Configuracao, ContaDeExtrato
+from conciliacao.configuracao import Configuracao, ConfiguracaoDeMigracao, ContaDeExtrato
 from conciliacao.encargo import ParametrosDeEncargo
 
 CABECALHO_PROTHEUS = "cliente;cnpj;unidade;documento;nosso_numero;tipo;emissao;vencimento;valor;status"
 CABECALHO_ITAU = "data;historico;documento;valor;tipo"
 CABECALHO_OMIE = "customer_name,tax_id,invoice_ref,due_date,amount,paid_flag"
+FRANQUEADO_DOS_TITULOS = "10200300"
 
 
 @dataclass(frozen=True)
@@ -89,3 +91,54 @@ def configuracao_itau(
         encargo=encargo,
         limite_de_combinacoes=limite_de_combinacoes,
     )
+
+
+def configuracao_com_migracao(
+    migrados: tuple[str, ...] | None = (FRANQUEADO_DOS_TITULOS,), conta_do_pix: str = "1234-5"
+) -> Configuracao:
+    base = configuracao_itau()
+    return replace(
+        base,
+        contas=(*base.contas, ContaDeExtrato(padrao="pix_recebidos*.json", banco="itau", conta=conta_do_pix)),
+        migracao=None if migrados is None else ConfiguracaoDeMigracao(frozenset(migrados)),
+    )
+
+
+def pix_recebido(
+    txid: str | None,
+    valor: str,
+    horario: str = "2025-03-05T14:30:00.000Z",
+    fim_do_e2e: str = "1",
+    componentes: dict[str, object] | None = None,
+) -> dict[str, object]:
+    recebido: dict[str, object] = {
+        "endToEndId": f"E00000000202503051430{fim_do_e2e:0>11}",
+        "valor": valor,
+        "horario": horario,
+        "chave": "chave-pix-do-recebedor",
+        "infoPagador": "pagamento",
+    }
+    if txid is not None:
+        recebido["txid"] = txid
+    if componentes is not None:
+        recebido["componentesValor"] = componentes
+    return recebido
+
+
+def escrever_pix_recebidos(pasta: Path, recebidos: list[dict[str, object]], nome: str = "pix_recebidos.json") -> Path:
+    caminho = pasta / nome
+    conteudo = {
+        "parametros": {
+            "inicio": "2025-03-01T00:00:00Z",
+            "fim": "2025-03-31T23:59:59Z",
+            "paginacao": {
+                "paginaAtual": 0,
+                "itensPorPagina": 100,
+                "quantidadeDePaginas": 1,
+                "quantidadeTotalDeItens": len(recebidos),
+            },
+        },
+        "pix": recebidos,
+    }
+    caminho.write_text(json.dumps(conteudo), encoding="utf-8")
+    return caminho
