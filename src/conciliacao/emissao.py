@@ -125,7 +125,7 @@ def main(argumentos: list[str] | None = None) -> int:
         print("Sem a seção [migracao.boleto], não há faixa de nosso número: os Títulos sem nosso número recebem só Pix.")
     armazenamento = Armazenamento(opcoes.estado)
     try:
-        emissao = emitir_cobrancas(armazenamento, configuracao, PortaSimulada())
+        emissao = emitir_cobrancas(armazenamento, configuracao, PortaSimulada(configuracao.encargo))
     except FaixaDeNossoNumeroEsgotada as erro:
         print(f"Nenhuma cobrança emitida: {erro}.", file=sys.stderr)
         return 2

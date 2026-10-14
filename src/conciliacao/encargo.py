@@ -86,11 +86,24 @@ def enquadrar(titulo: Titulo, valor_centavos: int, data: date, parametros: Param
     )
 
 
+def multa_e_juros(
+    valor_centavos: int, vencimento: date, data: date, parametros: ParametrosDeEncargo
+) -> tuple[int, int]:
+    dias_de_atraso = (data - vencimento_efetivo(vencimento)).days
+    if dias_de_atraso <= 0:
+        return 0, 0
+    return _multa_e_juros(valor_centavos, dias_de_atraso, parametros)
+
+
 def _encargo_previsto(valor_centavos: int, dias_de_atraso: int, parametros: ParametrosDeEncargo) -> int:
+    return sum(_multa_e_juros(valor_centavos, dias_de_atraso, parametros))
+
+
+def _multa_e_juros(valor_centavos: int, dias_de_atraso: int, parametros: ParametrosDeEncargo) -> tuple[int, int]:
     valor = Decimal(valor_centavos)
     multa = valor * parametros.multa_percentual / 100
     juros = valor * parametros.juros_ao_mes_percentual / 100 * dias_de_atraso / _DIAS_DO_MES_COMERCIAL
-    return _centavos(multa) + _centavos(juros)
+    return _centavos(multa), _centavos(juros)
 
 
 def _centavos(valor: Decimal) -> int:

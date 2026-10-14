@@ -161,8 +161,9 @@ def test_txid_alfanumerico_de_26_a_35_caracteres_unico_e_nunca_reaproveitado(
     assert len(set(txids)) == 4
 
 
-class _PortaFora:
+class _PortaFora(PortaSimulada):
     def __init__(self) -> None:
+        super().__init__()
         self.tentadas: list[CobrancaIdentificada] = []
 
     def emitir(self, cobranca: CobrancaIdentificada) -> None:

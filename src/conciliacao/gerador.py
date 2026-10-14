@@ -3,7 +3,7 @@ import random
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -40,9 +40,9 @@ _SUFIXOS_DO_OMIE = ("LTDA", "S/A", "EIRELI", "COM LTDA", "ME")
 _UNIDADES = ("SP-Capital", "SP-Interior", "MG", "RJ", "PR", "SC", "RS", "BA")
 _UNIDADE_DO_OMIE = "AM"
 _TIPOS_DE_TITULO = ("Produto", "Royalty", "Serviço")
-_DEPOSITOS = ("DEPOSITO NAO IDENTIFICADO", "DEPOSITO EM DINHEIRO", "DEPOSITO ENVELOPE")
+DEPOSITOS = ("DEPOSITO NAO IDENTIFICADO", "DEPOSITO EM DINHEIRO", "DEPOSITO ENVELOPE")
 _DEBITOS = ("CESTA DE SERVICOS", "IOF", "TED ENVIADA", "PAGAMENTO DE SALARIOS")
-_LIQUIDACAO = "LIQUIDACAO COBRANCA SIMPLES"
+LIQUIDACAO = "LIQUIDACAO COBRANCA SIMPLES"
 _DEBITO_DO_FIM_DO_MES = "MANUTENCAO DE CONTA"
 
 
@@ -164,11 +164,11 @@ class _Franqueado:
 
     @property
     def cnpj(self) -> str:
-        return _cnpj(self.raiz + "0001")
+        return cnpj_com_digitos(self.raiz + "0001")
 
     @property
     def cnpj_de_filial(self) -> str:
-        return _cnpj(self.raiz + "0002")
+        return cnpj_com_digitos(self.raiz + "0002")
 
     @property
     def nome_principal(self) -> str:
@@ -217,7 +217,7 @@ class _Gerador:
     pagos: set[tuple[str, str]] = field(default_factory=set)
     chaves: set[tuple[str, date, str, int]] = field(default_factory=set)
     nomes_de_ia: set[str] = field(default_factory=set)
-    _somas: dict[str, Counter[int]] = field(default_factory=dict)
+    _opcoes_de_valor: "OpcoesDeValor" = field(init=False)
     _nomes_normalizados: list[tuple[str, str]] = field(default_factory=list)
     _por_raiz_do_franqueado: dict[str, _Franqueado] = field(default_factory=dict)
 
@@ -235,6 +235,9 @@ class _Gerador:
         self._gerar_franqueados()
         self._por_raiz_do_franqueado = {f.raiz: f for f in self.franqueados}
         self._gerar_titulos()
+        self._opcoes_de_valor = OpcoesDeValor(
+            {raiz: [t.valor_centavos for t in titulos] for raiz, titulos in self.por_raiz.items()}, self.configuracao.encargo
+        )
         self._gerar_contas()
         self._nomes_normalizados = [(nome_normalizado(n), f.raiz) for f in self.franqueados for n in f.nomes]
         self._gerar_creditos()
@@ -256,7 +259,7 @@ class _Gerador:
             raiz = self._novo(raizes, lambda: str(self.rng.randrange(10_000_000, 100_000_000)))
             while True:
                 tipo, nucleo = self.rng.choice(_TIPOS), self._nucleo()
-                prefixo = _como_o_banco_escreve(f"{tipo} {nucleo}")[:_LARGURA_DO_NOME_NO_EXTRATO]
+                prefixo = como_o_banco_escreve(f"{tipo} {nucleo}")[:_LARGURA_DO_NOME_NO_EXTRATO]
                 if prefixo not in prefixos:
                     prefixos.add(prefixo)
                     break
@@ -472,7 +475,7 @@ class _Gerador:
     def _deposito(self, titulo: _Titulo) -> bool:
         return self._credito(
             [titulo], Caso.DEPOSITO_SEM_NOME, titulo.valor_centavos, self._dias_em_dia(titulo),
-            (self.rng.choice(_DEPOSITOS), ""), Destino.FILA_DE_EXCECOES,
+            (self.rng.choice(DEPOSITOS), ""), Destino.FILA_DE_EXCECOES,
             MotivoDeNaoIdentificacao.SEM_IDENTIFICACAO_DO_PAGADOR,
         )  # fmt: skip
 
@@ -502,7 +505,7 @@ class _Gerador:
     def _boleto(self, titulo: _Titulo, caso: Caso, valor: int, dias: list[date]) -> bool:
         destino = Destino.FILA_DE_EXCECOES if caso is Caso.PARCIAL else Destino.LISTA_DE_BAIXA
         motivo = MotivoDeNaoIdentificacao.VALOR_NAO_FECHA if caso is Caso.PARCIAL else None
-        historico = (_LIQUIDACAO, titulo.nosso_numero or "")
+        historico = (LIQUIDACAO, titulo.nosso_numero or "")
         return self._credito([titulo], caso, valor, dias, historico, destino, motivo, conta=self.contas[0].conta)
 
     def _credito(
@@ -597,36 +600,18 @@ class _Gerador:
         return (f"{self.rng.choice(('PIX RECEBIDO', 'TED RECEBIDA'))} {nome}", "")
 
     def _abreviar(self, nome: str) -> str:
-        primeira, *resto = _como_o_banco_escreve(nome).split()
-        palavras = [primeira[:3], *(p[:4] if len(p) > 5 and self.rng.random() < 0.5 else p for p in resto)]
-        return self._truncar(" ".join(palavras))
+        return abreviar(nome, self.rng)
 
     @staticmethod
     def _truncar(nome: str) -> str:
-        return _como_o_banco_escreve(nome)[:_LARGURA_DO_NOME_NO_EXTRATO].rstrip()
+        return truncar_como_o_banco(nome)
 
     def _franqueados_do_prefixo(self, nome: str) -> list[str]:
         normalizado = nome_normalizado(nome)
         return sorted({raiz for nome_do_franqueado, raiz in self._nomes_normalizados if nome_do_franqueado.startswith(normalizado)})
 
     def _opcoes(self, raiz: str, valor: int) -> int:
-        titulos = self.por_raiz[raiz]
-        sozinhos = sum(1 for t in titulos if t.valor_centavos <= valor <= t.valor_centavos + self._folga(t.valor_centavos))
-        return sozinhos + self._somas_da_raiz(raiz)[valor]
-
-    def _folga(self, valor: int) -> int:
-        # Acima do Encargo previsto de qualquer atraso possível dentro do mês, para nunca subestimar o que fecha.
-        encargo = self.configuracao.encargo
-        percentual = encargo.multa_percentual + encargo.juros_ao_mes_percentual * 40 / 30
-        return math.ceil(Decimal(valor) * percentual / 100) + encargo.tolerancia_centavos + 2
-
-    def _somas_da_raiz(self, raiz: str) -> Counter[int]:
-        if raiz not in self._somas:
-            parciais = [(0, 0)]
-            for titulo in self.por_raiz[raiz]:
-                parciais += [(soma + titulo.valor_centavos, tamanho + 1) for soma, tamanho in parciais]
-            self._somas[raiz] = Counter(soma for soma, tamanho in parciais if tamanho >= 2)
-        return self._somas[raiz]
+        return self._opcoes_de_valor.opcoes(raiz, valor)
 
     def _arquivos(self) -> dict[str, str]:
         competencia = f"{self.configuracao.ano}{self.configuracao.mes:02d}"
@@ -646,12 +631,8 @@ class _Gerador:
                 (e for e in self.gabarito if e.conta == conta.conta),
                 key=lambda e: (e.data, e.natureza, e.historico, e.valor_centavos),
             )
-            arquivos[self.arquivos_dos_extratos[conta.conta]] = _csv(
-                "data;historico;documento;valor;tipo",
-                [
-                    ";".join([_data_ptbr(e.data), e.historico, e.documento, _valor_ptbr(e.valor_centavos), e.natureza.value])
-                    for e in do_extrato
-                ],
+            arquivos[self.arquivos_dos_extratos[conta.conta]] = extrato_itau(
+                (e.data, e.historico, e.documento, e.valor_centavos, e.natureza) for e in do_extrato
             )
         return arquivos
 
@@ -687,6 +668,51 @@ class _Gerador:
         )
 
 
+class OpcoesDeValor:
+    def __init__(self, valores_por_raiz: Mapping[str, Sequence[int]], encargo: ParametrosDeEncargo) -> None:
+        self._valores_por_raiz = valores_por_raiz
+        self._encargo = encargo
+        self._somas: dict[str, Counter[int]] = {}
+
+    def opcoes(self, raiz: str, valor: int) -> int:
+        valores = self._valores_por_raiz.get(raiz, ())
+        sozinhos = sum(1 for titulo in valores if titulo <= valor <= titulo + self._folga(titulo))
+        return sozinhos + self._somas_da_raiz(raiz)[valor]
+
+    def _folga(self, valor: int) -> int:
+        # Acima do Encargo previsto de qualquer atraso possível dentro do mês, para nunca subestimar o que fecha.
+        percentual = self._encargo.multa_percentual + self._encargo.juros_ao_mes_percentual * 40 / 30
+        return math.ceil(Decimal(valor) * percentual / 100) + self._encargo.tolerancia_centavos + 2
+
+    def _somas_da_raiz(self, raiz: str) -> Counter[int]:
+        if raiz not in self._somas:
+            parciais = [(0, 0)]
+            for valor in self._valores_por_raiz.get(raiz, ()):
+                parciais += [(soma + valor, tamanho + 1) for soma, tamanho in parciais]
+            self._somas[raiz] = Counter(soma for soma, tamanho in parciais if tamanho >= 2)
+        return self._somas[raiz]
+
+
+def extrato_itau(lancamentos: Iterable[tuple[date, str, str, int, Natureza]]) -> str:
+    return _csv(
+        "data;historico;documento;valor;tipo",
+        [
+            ";".join([_data_ptbr(data), historico, documento, _valor_ptbr(valor), natureza.value])
+            for data, historico, documento, valor, natureza in lancamentos
+        ],
+    )
+
+
+def truncar_como_o_banco(nome: str) -> str:
+    return como_o_banco_escreve(nome)[:_LARGURA_DO_NOME_NO_EXTRATO].rstrip()
+
+
+def abreviar(nome: str, rng: random.Random) -> str:
+    primeira, *resto = como_o_banco_escreve(nome).split()
+    palavras = [primeira[:3], *(p[:4] if len(p) > 5 and rng.random() < 0.5 else p for p in resto)]
+    return truncar_como_o_banco(" ".join(palavras))
+
+
 def _csv(cabecalho: str, linhas: list[str]) -> str:
     return "\n".join([cabecalho, *linhas]) + "\n"
 
@@ -695,7 +721,7 @@ def _sem_acento(texto: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c))
 
 
-def _como_o_banco_escreve(nome: str) -> str:
+def como_o_banco_escreve(nome: str) -> str:
     return " ".join(re.sub(r"[^A-Z0-9 ]", "", _sem_acento(nome).upper()).split())
 
 
@@ -703,7 +729,7 @@ def _como_o_omie_escreve(nome: str) -> str:
     return " ".join(_sem_acento(nome).upper().replace("&", "E").split())
 
 
-def _cnpj(base: str) -> str:
+def cnpj_com_digitos(base: str) -> str:
     digitos = [int(d) for d in base]
     for pesos in ((5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2), (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)):
         resto = sum(d * p for d, p in zip(digitos, pesos)) % 11

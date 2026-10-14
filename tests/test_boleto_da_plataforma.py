@@ -124,7 +124,7 @@ def test_faixa_configurada_depois_so_acrescenta_o_boleto_sem_reenviar_o_pix(
 def test_titulo_que_ganhou_nosso_numero_no_protheus_nao_recebe_boleto_da_plataforma(
     pasta: Path, armazenamento: Armazenamento
 ) -> None:
-    class _PortaFora:
+    class _PortaFora(PortaSimulada):
         def emitir(self, cobranca: CobrancaIdentificada) -> None:
             raise ConnectionError("porta fora do ar")
 
