@@ -66,7 +66,7 @@ def executar_conciliacao(
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
-        identificada = _cobranca_identificada(armazenamento, configuracao, leitura.retornos, lancamentos)
+        identificada = _cobranca_identificada(armazenamento, configuracao, leitura.retornos)
         pelo_saldo = motor(
             titulos,
             lancamentos.values(),
@@ -151,14 +151,14 @@ def _cobranca_identificada(
     armazenamento: Armazenamento,
     configuracao: Configuracao,
     lidos: Iterable[RetornoDeCobranca],
-    lancamentos: Mapping[int, Lancamento],
 ) -> _CobrancaIdentificada:
     if configuracao.migracao is None:
         return _CobrancaIdentificada()
     armazenamento.guardar_retornos(lidos)
     enriquecidos = armazenamento.retornos_dos_creditos()
-    id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
-    livres = [lancamento for lancamento in lancamentos.values() if lancamento.chave_natural not in enriquecidos]
+    creditos = armazenamento.todos_os_creditos()
+    id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in creditos.items()}
+    livres = [lancamento for lancamento in creditos.values() if lancamento.chave_natural not in enriquecidos]
     enriquecimento = enriquecer(armazenamento.retornos_sem_credito(), livres, nome_do_pagador)
     for retorno, credito in enriquecimento.ligacoes:
         armazenamento.registrar_enriquecimento(retorno, id_por_chave[credito.chave_natural])

@@ -1,13 +1,14 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.configuracao import Configuracao
-from conciliacao.dominio import Resultado, TipoDeEvidencia
+from conciliacao.decisoes import registrar_decisao_da_tela
+from conciliacao.dominio import LinhaDeDecisao, Resultado, TipoDeDecisao, TipoDeEvidencia
 from conciliacao.emissao import emitir_cobrancas
 from conciliacao.execucao import executar_conciliacao
 from conciliacao.porta import CobrancaIdentificada, PortaSimulada
-from conciliacao.saidas import linhas_do_resumo
+from conciliacao.saidas import ABA_DA_FILA_DE_EXCECOES, linhas_do_resumo
 from tests.arquivos import (
     FRANQUEADO_DOS_TITULOS,
     LinhaItau,
@@ -345,3 +346,32 @@ def test_retornos_na_pasta_nao_mudam_a_data_de_referencia_nem_a_conferencia_de_s
         t.valor_centavos for t in sem.resumo.totais.values()
     )
     assert len(com.resumo.retornos_sem_credito) == 2
+
+
+def test_retorno_de_credito_ja_encerrado_pela_analista_e_ligado_sem_mudar_a_decisao(
+    pasta: Path, armazenamento: Armazenamento
+) -> None:
+    emitidas = _emitir(pasta, armazenamento)
+    escrever_extrato_itau(pasta, [REFERENCIA, LinhaItau("06/03/2025", "PIX RECEBIDO FULANO", "1.000,00")])
+    [credito] = [item for item in _conciliar(pasta, armazenamento).fila_de_excecoes if item.lancamento.valor_centavos == 100000]
+    registrar_decisao_da_tela(
+        armazenamento,
+        LinhaDeDecisao(
+            ABA_DA_FILA_DE_EXCECOES,
+            credito.identificador,
+            "conciliado fora",
+            franqueado=FRANQUEADO_DOS_TITULOS,
+            referencia="acordo 1",
+        ),
+        "analista",
+        datetime(2025, 3, 7, 9, 0),
+    )
+    _conciliar(pasta, armazenamento)
+    escrever_pix_recebidos(pasta, [_pago(_txid(emitidas["NF 1"]), "1")])
+
+    depois = _conciliar(pasta, armazenamento)
+
+    assert depois.resumo.retornos_sem_credito == ()
+    assert credito.lancamento.chave_natural in armazenamento.retornos_dos_creditos()
+    assert all(item.lancamento != credito.lancamento for item in depois.itens)
+    assert armazenamento.classificados_como(TipoDeDecisao.CONCILIADO_FORA).keys() == {credito.lancamento.chave_natural}

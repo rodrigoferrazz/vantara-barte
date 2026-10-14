@@ -385,6 +385,13 @@ class Armazenamento:
         )
         return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
 
+    def todos_os_creditos(self) -> dict[int, Lancamento]:
+        linhas = self._conexao.execute(
+            f"SELECT id, {_COLUNAS_LANCAMENTO} FROM lancamentos WHERE natureza = ? ORDER BY data, id",
+            (Natureza.CREDITO.value,),
+        )
+        return {linha[0]: _lancamento(linha[1:]) for linha in linhas}
+
     def classificados_como(self, tipo: TipoDeDecisao) -> dict[ChaveNatural, datetime]:
         linhas = self._conexao.execute(
             f"SELECT d.momento, {_COLUNAS_DO_LANCAMENTO_L} FROM decisoes d JOIN lancamentos l ON l.id = d.lancamento_id"
