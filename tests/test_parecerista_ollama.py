@@ -10,6 +10,7 @@ import pytest
 from conciliacao.configuracao import ConfiguracaoDaIa, ConfiguracaoInvalida, carregar_configuracao
 from conciliacao.dominio import Resposta
 from conciliacao.parecerista import VERSAO_DO_PROMPT, PareceristaOllama
+from tests.avaliacao_parecerista import avaliar
 from tests.parecerista import ollama_do_projeto
 
 CONTAS = '[[contas]]\npadrao = "itau*.csv"\nbanco = "itau"\nconta = "1"\n'
@@ -64,6 +65,22 @@ def test_resposta_estruturada_vira_parecer_com_modelo_e_versao_do_prompt(ollama_
     assert "CONF ALVORADA" in perguntas
     assert "Confeitaria Alvorada Ltda" in perguntas
     assert "CONF ALVORADA NORTE" in perguntas
+
+
+def test_pedido_desliga_o_modo_de_raciocinio_e_termina_com_a_pergunta_do_credito(ollama_falso: str) -> None:
+    _OllamaFalso.conteudo = json.dumps({"pertence": False, "explicacao": "nomes diferentes"})
+
+    _parecerista(ollama_falso).dar_parecer("MERC HORIZ", ["Confeitaria Alvorada Ltda"])
+
+    [pedido] = _OllamaFalso.pedidos
+    assert pedido["think"] is False
+    mensagens = pedido["messages"]
+    assert isinstance(mensagens, list)
+    assert mensagens[0]["role"] == "system"
+    assert mensagens[-1]["role"] == "user"
+    assert "MERC HORIZ" in mensagens[-1]["content"]
+    assert "Confeitaria Alvorada Ltda" in mensagens[-1]["content"]
+    assert not any("MERC HORIZ" in mensagem["content"] for mensagem in mensagens[:-1])
 
 
 def test_resposta_negativa_vira_parecer_nao(ollama_falso: str) -> None:
@@ -139,3 +156,12 @@ def test_ollama_real_responde_parecer_estruturado() -> None:
     assert parecer.resposta in (Resposta.SIM, Resposta.NAO)
     assert parecer.explicacao
     assert parecer.versao_do_prompt == VERSAO_DO_PROMPT
+
+
+@pytest.mark.integracao
+def test_ollama_real_no_conjunto_de_avaliacao_com_pares_ficticios() -> None:
+    avaliacao = avaliar(PareceristaOllama(ollama_do_projeto()))
+
+    assert avaliacao.indisponiveis == ()
+    assert len(avaliacao.falsos_positivos) <= 1, str(avaliacao)
+    assert avaliacao.acertos >= 26, str(avaliacao)

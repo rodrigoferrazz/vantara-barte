@@ -106,11 +106,6 @@ TABELA_DA_SPEC = (
     Esperado("31/07", "TARIFA PIX EMISSAO", "89,00", FORA),
 )
 
-QWEN_RESPONDE_NAO = (
-    "O qwen2.5:3b com o prompt nome-v1 responde 'não' para este nome (ticket 08), então o Crédito fica "
-    "'sem identificação do pagador' com evidência só valor. Limitação do modelo; o prompt não é ajustado à amostra."
-)
-
 
 def _centavos(valor: str) -> int:
     return int(valor.replace(".", "").replace(",", ""))
@@ -138,10 +133,6 @@ def resultado(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathF
     return _conciliar_a_amostra(tmp_path_factory.mktemp(request.param), parecerista)
 
 
-def _com_ollama(request: pytest.FixtureRequest) -> bool:
-    return bool(request.node.callspec.params["resultado"] == "ollama")
-
-
 def _item(resultado: Resultado, esperado: Esperado) -> Item:
     dia, mes = (int(parte) for parte in esperado.data.split("/"))
     [item] = [
@@ -164,11 +155,8 @@ def test_totais_com_data_de_referencia_31_07(resultado: Resultado) -> None:
 
 @pytest.mark.parametrize("esperado", TABELA_DA_SPEC, ids=lambda e: f"{e.data} {e.lancamento}")
 def test_cada_lancamento_tem_o_destino_o_titulo_e_o_motivo_da_tabela_da_spec(
-    resultado: Resultado, esperado: Esperado, request: pytest.FixtureRequest
+    resultado: Resultado, esperado: Esperado
 ) -> None:
-    if esperado.evidencia is Evidencia.PARECER_DE_LLM and _com_ollama(request):
-        request.applymarker(pytest.mark.xfail(strict=True, reason=QWEN_RESPONDE_NAO))
-
     item = _item(resultado, esperado)
 
     assert item.destino is esperado.destino

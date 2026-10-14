@@ -17,11 +17,12 @@ tolerancia_reais = 0.00
 [somas]
 limite_de_combinacoes = 100000
 
-# LLM local via Ollama que só dá parecer sobre o nome do pagador (ADR 0003). O modelo de 3B quantizado (~2 GB)
-# cabe num MacBook Air M2 de 8 GB. Sem esta seção, os itens que precisariam de parecer ficam marcados "IA indisponível".
+# LLM local via Ollama que só dá parecer sobre o nome do pagador (ADR 0003). O modelo de 4B quantizado (~2,5 GB)
+# cabe num MacBook Air M2 de 8 GB; a escolha está em docs/decisoes-implementacao.md ("Correção: prompt e modelo da
+# IA"). Sem esta seção, os itens que precisariam de parecer ficam marcados "IA indisponível".
 [ia]
 endereco = "http://localhost:11434"
-modelo = "qwen2.5:3b"
+modelo = "qwen3:4b"
 tempo_limite_segundos = 120
 
 # Alerta do Resumo: avisa quando a parte resolvida sozinha (em quantidade ou em valor) cai mais que este número de

@@ -244,6 +244,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** seção `[ia]` do `conciliacao.toml` com `endereco`, `modelo` e `tempo_limite_segundos`, todos obrigatórios dentro da seção e campo desconhecido recusado. Sem a seção, a execução roda e os itens que precisariam de parecer ficam "IA indisponível" com o motivo "falta a seção [ia] na configuração". O padrão do projeto é `qwen2.5:3b` (cerca de 2 GB, cabe no M2 de 8 GB) com tempo limite de 120 s, que cobre o carregamento do modelo na primeira chamada.
 - **Por quê:** endereço e modelo não podem estar no código; a falta da IA nunca para a conciliação, e o Resumo mostra a situação.
 - **Alternativas:** recusar a configuração sem `[ia]` (pararia a execução por causa da IA); valores padrão no código.
+- **Substituída:** ver Correção: prompt e modelo da IA
 
 ## Ticket 08: parecer no workbook e no Resumo
 
@@ -257,6 +258,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Por quê:** num conjunto de 9 pares de nomes inventados, o `qwen2.5:3b` acertou 6 com esse prompt; com a primeira versão, que só descrevia a tarefa, respondia sim para todos os nomes sem relação. Errar para "não" mantém a sugestão por valor e só muda o Motivo; errar para "sim" daria um "pagador provável" falso.
 - **Alternativas:** exemplos dentro do prompt (few-shot), que pioraram para 4 de 9; modelo maior (não cabe no M2 de 8 GB com folga).
 - **Exemplo que sai da regra:** na amostra, a spec espera "pagador provável, primeira vez" com parecer positivo para TED DOCE PONTO COM ALIME e PIX SABOR CIA. O `qwen2.5:3b` com este prompt responde "não" nos dois, então ficam "sem identificação do pagador", mantendo as sugestões NF 104533 + NF 104588 e NF 104552. É limitação do modelo, não da regra; o prompt não foi ajustado aos nomes da amostra.
+- **Substituída:** ver Correção: prompt e modelo da IA
 
 ## Ticket 09: última data de cada conta e conta sem Extrato
 
@@ -569,7 +571,7 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** três divergências ficam registradas como `xfail(strict=True)`, sem mudar regra de produção: o PIX de 30/07 (1.850,00) sai "valor não fecha" em vez de "Crédito sem título em aberto" (ticket 06, Títulos propostos ou sugeridos não são reservados); "em análise" dá 14 em vez de 9 (ticket 09 conta Crédito candidato na Lista ou na Fila); com o Ollama real, DOCE PONTO e SABOR CIA saem "sem identificação do pagador" com evidência só valor (ticket 08, o `qwen2.5:3b` responde "não"). O TED de 14/07 tem a sugestão NF 104533 + NF 104588 nos dois casos: com o "sim" pelo parecer, com o "não" pela sugestão por valor do Franqueado candidato.
 - **Por quê:** a regra é aplicada como princípio e não é ajustada aos exemplos; as duas primeiras dependem de decisão do usuário (reservar Títulos já propostos, o que conta como "em análise") e a terceira é limitação do modelo.
 - **Alternativas:** reservar Títulos propostos na Lista ou sugeridos na Fila; contar só a Fila em "em análise"; ajustar o prompt aos nomes da amostra.
-- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto e Correção: "em análise" só com Crédito candidato na Fila
+- **Substituída:** ver Correção: Título candidato e Crédito sem título em aberto, Correção: "em análise" só com Crédito candidato na Fila e Correção: prompt e modelo da IA
 
 ## Ticket 17: verificação de identificadores da amostra no código de produção
 
@@ -637,3 +639,36 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** `executar_conciliacao` ganha o parâmetro opcional `motor`, que por padrão é `conciliar`. O teste da parada pela conferência de soma passa um motor falso que só classifica os débitos e perde o Crédito, pelo ponto de entrada, em vez de importar `conciliar` e trocar o nome dentro do módulo da execução. O teste continua verificando a parada com a soma do Extrato na mensagem e que nada foi guardado (a execução seguinte, com o motor real, é a primeira e grava os dois lançamentos); conferido que ele falha se a execução deixar de chamar a conferência.
 - **Por quê:** decisão do usuário ("corrige as violações de Standards"); a spec (Testing Decisions, linha 185) diz que nenhum teste depende de funções internas do motor. Um motor correto nunca perde lançamento, então só um motor substituído exercita a conferência; o motor já é a unidade que a execução chama, o que torna o parâmetro uma porta natural, e o tipo `Motor` fica em `motor.py`. O tipo aceita qualquer lista de argumentos para não repetir a assinatura do motor num Protocol.
 - **Alternativas:** testar `conferir_soma` direto (perderia a verificação de que a execução para sem guardar nada); provocar a falha por um arquivo de entrada (não existe entrada que faça um motor correto perder um lançamento); manter o monkeypatch (contra a spec).
+
+## Correção: prompt e modelo da IA
+
+- **Decisão:** o Parecerista de nome passa a usar o prompt `nome-v2` com o modelo `qwen3:4b` (cerca de 2,5 GB). O `nome-v2` mantém a saída `{explicacao, pertence}` e acrescenta oito exemplos fictícios (few-shot, como pares de mensagens antes da pergunta), quatro positivos e quatro negativos, cobrindo abreviação, corte no limite de caracteres, palavras invertidas, palavra faltando, sufixo societário, "&" escrito como "E", "COM" por "Comercio", acento, nome de pessoa e nomes parecidos de empresas diferentes; nenhum nome ou palavra da amostra. O pedido ao Ollama leva `"think": false`, que desliga o modo de raciocínio do `qwen3` (o Ollama 0.40 aceita o campo também em modelos sem esse modo). O modelo fica só no `conciliacao.toml`. A medição usa um conjunto de avaliação próprio, `tests/avaliacao_parecerista.py`, com 28 pares fictícios (14 positivos e 14 negativos, todos diferentes dos exemplos do prompt), que também roda como script (`uv run python -m tests.avaliacao_parecerista [modelo ...]`) e como teste de integração (`test_ollama_real_no_conjunto_de_avaliacao_com_pares_ficticios`: nenhum indisponível, no máximo 1 falso positivo e pelo menos 26 acertos, o resultado medido do modelo escolhido menos uma folga de 1 acerto). DOCE PONTO e SABOR CIA da amostra passaram a receber "sim", e o `xfail` do parecer com o Ollama real foi removido do teste de aceitação, sem mudar a tabela.
+- **Tentativas** (temperatura 0; tempo médio por chamada no M2 de 8 GB, com o modelo já carregado; amostra = resposta para DOCE PONTO / SABOR CIA, vista pelo teste de aceitação de integração e só como verificação final, sem orientar o prompt):
+
+| Prompt | Modelo | Acertos (28) | Falsos positivos | Falsos negativos | Tempo por chamada | Amostra |
+|---|---|---|---|---|---|---|
+| nome-v1 | qwen2.5:3b | 18 | 2 | 8 | 1,4 s | não / não |
+| nome-v2 | qwen2.5:3b | 19 | 8 | 1 | 1,3 s | sim / sim |
+| nome-v3 | qwen2.5:3b | 20 | 6 | 2 | 3,1 s | sim / sim |
+| nome-v4 | qwen2.5:3b | 21 | 6 | 1 | 3,5 s | sim / sim |
+| nome-v1 | llama3.2:3b | 13 | 1 | 11 (+3 indisponíveis) | 15,1 s | não / não |
+| nome-v2 | llama3.2:3b | 17 | 9 | 2 | 1,4 s | sim / sim |
+| nome-v3 | llama3.2:3b | 22 | 5 | 1 | 4,0 s | sim / sim |
+| nome-v4 | llama3.2:3b | 18 | 9 | 1 | 4,0 s | sim / sim |
+| nome-v1 | phi4-mini (3,8B) | 15 | 3 | 10 | 1,8 s | não / não |
+| nome-v2 | phi4-mini (3,8B) | 18 | 5 | 5 | 1,5 s | sim / não |
+| nome-v3 | phi4-mini (3,8B) | 23 | 3 | 2 | 4,6 s | sim / sim |
+| nome-v4 | phi4-mini (3,8B) | 26 | 2 | 0 | 5,2 s | sim / sim |
+| nome-v1 | qwen3:4b, sem raciocínio | 27 | 1 | 0 | 8,4 s e 9,0 s | sim / sim |
+| **nome-v2** | **qwen3:4b, sem raciocínio** | **27** | **1** | **0** | **2,5 s e 2,0 s** | **sim / sim** |
+| nome-v3 | qwen3:4b, sem raciocínio | 20 | 8 | 0 | 6,1 s | sim / sim |
+| nome-v4 | qwen3:4b, sem raciocínio | 22 | 6 | 0 | 7,2 s | sim / sim |
+
+  - `nome-v1`: o prompt anterior, sem exemplos.
+  - `nome-v2`: regra reescrita (cada palavra do extrato corresponde a uma do nome, igual ou começo dela, em qualquer ordem; palavras do nome podem faltar; na dúvida, "não") e os oito exemplos fictícios.
+  - `nome-v3`: `nome-v2` com a saída estruturada palavra por palavra (`palavras: [{palavra, correspondente}]` antes da explicação). Os modelos preenchem correspondências erradas ("MAR" para "Sul") e respondem "sim" assim mesmo. A instrução tinha um par de palavras parecidas que repetia palavras do conjunto de avaliação, retirado no `nome-v4`.
+  - `nome-v4`: `nome-v3` com a exigência de o correspondente começar exatamente com as letras da palavra do extrato e dois exemplos a mais de corte no limite (um positivo e um negativo).
+  - O único falso positivo do escolhido é "OLIVEIRA E SANTOS" para "Oliveira & Cia Materiais Ltda". Não foi criado prompt para corrigi-lo, para não ajustar o prompt ao próprio conjunto de avaliação.
+  - `gemma3:4b` e `phi3.5` não foram medidos: o disco da máquina tinha cerca de 2 GB livres, e cada modelo foi baixado, medido e removido em seguida (`llama3.2:3b` e `phi4-mini`), ficando só o `qwen2.5:3b` que já existia e o `qwen3:4b` escolhido.
+- **Por quê:** decisão do usuário ("melhora o prompt com exemplos genéricos, sem nada da amostra, e testa outros modelos de 3 a 4B. Registra cada tentativa no arquivo de decisões"). A spec (módulo 6, linha 164) pede modelo de 3 a 4B quantizado que caiba no M2 de 8 GB, e o ADR 0003 deixa a LLM só no parecer, sempre na Fila. O critério foi o conjunto fictício, priorizando poucos falsos positivos, coerente com a postura conservadora (um "sim" errado vira "pagador provável, primeira vez" falso; um "não" errado só muda o Motivo e mantém a sugestão por valor). `qwen3:4b` com `nome-v2` empata com `nome-v1` no menor número de falsos positivos e no maior número de acertos, e é cerca de quatro vezes mais rápido. A saída palavra por palavra piorou todos os modelos menos o `phi4-mini`, que ainda ficou atrás.
+- **Alternativas:** manter `qwen2.5:3b` com `nome-v1` (2 falsos positivos e 8 falsos negativos); `phi4-mini` com `nome-v4` (26 acertos, 2 falsos positivos, mais lento); `qwen3:4b` com o modo de raciocínio ligado (não medido: gera o raciocínio antes de cada resposta, bem mais lento, e o modelo já não tem falso negativo no conjunto); conferir em código as correspondências palavra por palavra do `nome-v3` e transformar em "não" as incoerentes (o código passaria a decidir sobre o nome, além do pedido); exemplos com nomes da amostra (proibido e seria ajustar a regra ao exemplo).
