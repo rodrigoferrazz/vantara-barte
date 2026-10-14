@@ -275,10 +275,29 @@ class RetornoDeCobranca:
     data: date
     valor_centavos: int
     componentes: ComponentesDoRetorno | None = None
+    documento_do_pagador: str | None = None
+    nome_do_pagador: str | None = None
 
     @property
     def chave_do_identificador(self) -> ChaveDoIdentificador:
         return (self.tipo, self.identificador)
+
+
+@dataclass(frozen=True)
+class RetornoSemCredito:
+    retorno: RetornoDeCobranca
+    creditos_do_par: int
+    retornos_do_par: int
+
+    def descrever(self) -> str:
+        retorno = self.retorno
+        par = f"{retorno.banco} {retorno.conta}, {retorno.data:%d/%m/%Y}, {formatar_reais(retorno.valor_centavos)}"
+        if not self.creditos_do_par:
+            return f"{par}; nenhum Crédito do Extrato com a mesma conta, data e valor"
+        return (
+            f"{par}; empate entre {self.creditos_do_par} Crédito(s) do Extrato e {self.retornos_do_par} Retorno(s) "
+            "com a mesma conta, data e valor, que o pagador não desfaz"
+        )
 
 
 @dataclass(frozen=True)
@@ -539,6 +558,7 @@ class Resumo:
     limite_de_queda: Decimal | None
     execucao_anterior: int | None = None
     parte_automatica_anterior: ParteAutomatica | None = None
+    retornos_sem_credito: tuple[RetornoSemCredito, ...] = ()
 
     @property
     def parte_automatica(self) -> ParteAutomatica:

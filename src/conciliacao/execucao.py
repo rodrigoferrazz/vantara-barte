@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from conciliacao.dominio import (
     PossivelDuplicidade,
     Resultado,
     RetornoDeCobranca,
+    RetornoSemCredito,
     TipoDeDecisao,
     TipoDeIdentificador,
     Titulo,
@@ -65,7 +66,7 @@ def executar_conciliacao(
             if lancamento.natureza is Natureza.DEBITO:
                 lancamentos[identificadores[lancamento.chave_natural]] = lancamento
         lancamentos.update(armazenamento.creditos_vivos())
-        retornos, vinculos = _cobranca_identificada(armazenamento, configuracao, leitura.retornos, lancamentos)
+        identificada = _cobranca_identificada(armazenamento, configuracao, leitura.retornos, lancamentos)
         pelo_saldo = motor(
             titulos,
             lancamentos.values(),
@@ -80,8 +81,8 @@ def executar_conciliacao(
             antecipacoes=armazenamento.classificados_como(TipoDeDecisao.ANTECIPACAO),
             fontes_nao_integradas=armazenamento.classificados_como(TipoDeDecisao.POSSIVEL_FONTE_NAO_INTEGRADA),
             divergencias=armazenamento.divergencias(),
-            retornos=retornos,
-            vinculos=vinculos,
+            retornos=identificada.retornos,
+            vinculos=identificada.vinculos,
         )
         classificacoes = [_com_titulos_da_exportacao(c, originais) for c in pelo_saldo]
         conferir_soma(list(lancamentos.values()), classificacoes)
@@ -91,7 +92,11 @@ def executar_conciliacao(
         cobranca = [
             replace(na_cobranca, titulo=originais[chave_do_titulo(na_cobranca.titulo)])
             for na_cobranca in lista_de_cobranca(
-                titulos, pelo_saldo, duplicidades, data_de_referencia.data, _boletos_da_plataforma(armazenamento, vinculos)
+                titulos,
+                pelo_saldo,
+                duplicidades,
+                data_de_referencia.data,
+                _boletos_da_plataforma(armazenamento, identificada.vinculos),
             )
         ]
         execucao = armazenamento.registrar_execucao(
@@ -113,6 +118,7 @@ def executar_conciliacao(
             acompanhamento_do_erp=acompanhamento.situacoes,
             decisoes_da_tela_lidas=decisoes.da_tela,
             conflitos_das_decisoes=decisoes.lidas.conflitos,
+            retornos_sem_credito=identificada.sem_credito,
         )
     return armazenamento.carregar_resultado(execucao)
 
@@ -134,22 +140,30 @@ def possiveis_duplicidades_nao_decididas(
     return [d for d in possiveis_duplicidades(na_exportacao) if d.chave not in decididas]
 
 
+@dataclass(frozen=True)
+class _CobrancaIdentificada:
+    retornos: dict[ChaveNatural, RetornoDeCobranca] = field(default_factory=dict)
+    vinculos: dict[ChaveDoIdentificador, VinculoDeCobranca] = field(default_factory=dict)
+    sem_credito: list[RetornoSemCredito] = field(default_factory=list)
+
+
 def _cobranca_identificada(
     armazenamento: Armazenamento,
     configuracao: Configuracao,
     lidos: Iterable[RetornoDeCobranca],
     lancamentos: Mapping[int, Lancamento],
-) -> tuple[dict[ChaveNatural, RetornoDeCobranca], dict[ChaveDoIdentificador, VinculoDeCobranca]]:
+) -> _CobrancaIdentificada:
     if configuracao.migracao is None:
-        return {}, {}
+        return _CobrancaIdentificada()
     armazenamento.guardar_retornos(lidos)
     enriquecidos = armazenamento.retornos_dos_creditos()
     id_por_chave = {lancamento.chave_natural: id_ for id_, lancamento in lancamentos.items()}
     livres = [lancamento for lancamento in lancamentos.values() if lancamento.chave_natural not in enriquecidos]
-    for retorno, credito in enriquecer(armazenamento.retornos_sem_credito(), livres):
+    enriquecimento = enriquecer(armazenamento.retornos_sem_credito(), livres, nome_do_pagador)
+    for retorno, credito in enriquecimento.ligacoes:
         armazenamento.registrar_enriquecimento(retorno, id_por_chave[credito.chave_natural])
     vinculos = {vinculo.chave: vinculo for vinculo in armazenamento.vinculos_de_cobranca()}
-    return armazenamento.retornos_dos_creditos(), vinculos
+    return _CobrancaIdentificada(armazenamento.retornos_dos_creditos(), vinculos, enriquecimento.sem_credito)
 
 
 def _boletos_da_plataforma(

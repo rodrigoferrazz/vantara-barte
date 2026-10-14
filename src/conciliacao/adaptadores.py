@@ -177,6 +177,8 @@ class PixRecebidos:
     campos_obrigatorios = ("endToEndId", "valor", "horario")
     componentes_do_valor = frozenset({"original", "saque", "troco", "juros", "multa", "abatimento", "desconto"})
     formato_do_txid = re.compile(r"[a-zA-Z0-9]{1,35}")
+    documentos_do_pagador = {"cpf": re.compile(r"\d{11}"), "cnpj": re.compile(r"\d{14}")}
+    campos_do_pagador = frozenset({*documentos_do_pagador, "nome"})
 
     def reconhece(self, conteudo: object) -> TypeGuard[dict[str, object]]:
         return isinstance(conteudo, dict) and set(conteudo) == self.chaves_do_arquivo
@@ -203,6 +205,7 @@ class PixRecebidos:
                 continue
             if not isinstance(txid, str) or not self.formato_do_txid.fullmatch(txid):
                 raise Recusa(f"pix {numero}: txid '{txid}' não tem de 1 a 35 letras e dígitos")
+            documento_do_pagador, nome_do_pagador = self._pagador(numero, recebido.get("pagador"))
             retornos.append(
                 RetornoDeCobranca(
                     tipo=TipoDeIdentificador.TXID,
@@ -213,9 +216,30 @@ class PixRecebidos:
                     data=_formato(numero, data_do_horario, recebido["horario"], local="pix"),
                     valor_centavos=_formato(numero, centavos_de_valor_com_ponto, recebido["valor"], local="pix"),
                     componentes=self._componentes(numero, recebido.get("componentesValor")),
+                    documento_do_pagador=documento_do_pagador,
+                    nome_do_pagador=nome_do_pagador,
                 )
             )
         return ConteudoDoArquivo(retornos=retornos)
+
+    def _pagador(self, numero: int, pagador: object) -> tuple[str | None, str | None]:
+        if pagador is None:
+            return None, None
+        if not isinstance(pagador, dict):
+            raise Recusa(f"pix {numero}: 'pagador' não é um objeto")
+        desconhecidos = sorted(set(pagador) - self.campos_do_pagador)
+        if desconhecidos:
+            raise Recusa(f"pix {numero}: campo do pagador desconhecido {_colunas(desconhecidos)}")
+        documentos = [campo for campo in self.documentos_do_pagador if campo in pagador]
+        if len(documentos) > 1:
+            raise Recusa(f"pix {numero}: pagador com 'cpf' e 'cnpj'")
+        for campo in documentos:
+            if not (isinstance(pagador[campo], str) and self.documentos_do_pagador[campo].fullmatch(pagador[campo])):
+                raise Recusa(f"pix {numero}: {campo} do pagador '{pagador[campo]}' fora do formato da API Pix")
+        nome = pagador.get("nome")
+        if nome is not None and not isinstance(nome, str):
+            raise Recusa(f"pix {numero}: nome do pagador não é texto")
+        return (pagador[documentos[0]] if documentos else None), (nome or None)
 
     def _componentes(self, numero: int, componentes: object) -> ComponentesDoValor | None:
         if componentes is None:
@@ -244,6 +268,7 @@ class RetornoCnab240:
     tamanho_do_registro = 240
     bancos_por_codigo = {"341": "itau"}
     movimentos_de_liquidacao = frozenset({"06", "17"})
+    digitos_por_tipo_de_inscricao = {"1": 11, "2": 14}
 
     def reconhece(self, linhas: list[str]) -> bool:
         return len(linhas[0]) == self.tamanho_do_registro and linhas[0][3:8] == "00000"
@@ -322,6 +347,7 @@ class RetornoCnab240:
         if acrescimos > pago:
             raise Recusa(f"linha {numero_u}: acréscimos maiores que o valor pago")
         ocorrencia = _formato(numero_u, data_ddmmaaaa, segmento_u[137:145])
+        nome_do_pagador = segmento_t[148:188].strip()
         return RetornoDeCobranca(
             tipo=TipoDeIdentificador.NOSSO_NUMERO,
             chave_natural=f"{nosso_numero} {ocorrencia.isoformat()}",
@@ -331,7 +357,18 @@ class RetornoCnab240:
             data=_formato(numero_u, data_ddmmaaaa, segmento_u[145:153]),
             valor_centavos=_formato(numero_u, campo_numerico, segmento_u[92:107]),
             componentes=ComponentesDoBoleto(pago - acrescimos, acrescimos) if acrescimos else None,
+            documento_do_pagador=self._documento_do_pagador(numero, segmento_t),
+            nome_do_pagador=nome_do_pagador or None,
         )
+
+    def _documento_do_pagador(self, numero: int, segmento_t: str) -> str | None:
+        digitos = self.digitos_por_tipo_de_inscricao.get(segmento_t[132])
+        if digitos is None:
+            return None
+        inscricao = segmento_t[133:148]
+        if not re.fullmatch(rf"0{{{len(inscricao) - digitos}}}\d{{{digitos}}}", inscricao):
+            raise Recusa(f"linha {numero}: inscrição do pagador '{inscricao}' não tem {digitos} dígitos")
+        return inscricao[-digitos:]
 
 
 PIX_RECEBIDOS = PixRecebidos()

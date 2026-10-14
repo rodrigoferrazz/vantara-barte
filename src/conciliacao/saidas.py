@@ -107,6 +107,11 @@ def linhas_do_resumo(resultado: Resultado) -> list[tuple[str, str | int]]:
     linhas.append(("Arquivos recusados", len(resumo.arquivos_recusados)))
     for recusado in resumo.arquivos_recusados:
         linhas.append((f"Recusado: {recusado.nome}", recusado.motivo))
+    if resumo.retornos_sem_credito:
+        linhas.append(("Retornos de cobrança sem Crédito", len(resumo.retornos_sem_credito)))
+    for sem_credito in resumo.retornos_sem_credito:
+        retorno = sem_credito.retorno
+        linhas.append((f"Sem Crédito: {retorno.tipo.value} {retorno.identificador}", sem_credito.descrever()))
     linhas.append(("Lançamentos novos no Extrato", resumo.lancamentos_novos))
     for destino, total in resumo.totais.items():
         linhas.append((destino.value, f"{total.quantidade} lançamento(s), {formatar_reais(total.valor_centavos)}"))

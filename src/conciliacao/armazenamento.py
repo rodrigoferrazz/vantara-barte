@@ -15,6 +15,7 @@ from conciliacao.dominio import (
     ComponentesDoRetorno,
     ComponentesDoValor,
     RetornoDeCobranca,
+    RetornoSemCredito,
     TipoDeIdentificador,
     VinculoDeCobranca,
     ConfirmacaoEmVigor,
@@ -292,11 +293,19 @@ CREATE TABLE IF NOT EXISTS retornos_de_cobranca (
     multa_centavos INTEGER,
     juros_centavos INTEGER,
     acrescimos_centavos INTEGER,
+    documento_do_pagador TEXT,
+    nome_do_pagador TEXT,
     UNIQUE (tipo, chave_natural)
 );
 CREATE TABLE IF NOT EXISTS enriquecimentos (
     retorno_id INTEGER NOT NULL UNIQUE REFERENCES retornos_de_cobranca(id),
     lancamento_id INTEGER NOT NULL UNIQUE REFERENCES lancamentos(id)
+);
+CREATE TABLE IF NOT EXISTS retornos_sem_credito (
+    execucao_id INTEGER NOT NULL REFERENCES execucoes(id),
+    retorno_id INTEGER NOT NULL REFERENCES retornos_de_cobranca(id),
+    creditos_do_par INTEGER NOT NULL,
+    retornos_do_par INTEGER NOT NULL
 );
 """
 
@@ -310,7 +319,8 @@ _COLUNAS_VINCULO = (
 )
 _COLUNAS_RETORNO = (
     "r.tipo, r.chave_natural, r.identificador, r.banco, r.conta, r.data, r.valor_centavos,"
-    " r.principal_centavos, r.multa_centavos, r.juros_centavos, r.acrescimos_centavos"
+    " r.principal_centavos, r.multa_centavos, r.juros_centavos, r.acrescimos_centavos,"
+    " r.documento_do_pagador, r.nome_do_pagador"
 )
 _COLUNAS_TITULO = (
     "t.sistema_de_origem, t.documento, t.nome_do_franqueado, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
@@ -581,8 +591,9 @@ class Armazenamento:
         self._conexao.executemany(
             "INSERT OR IGNORE INTO retornos_de_cobranca"
             " (tipo, chave_natural, identificador, banco, conta, data, valor_centavos,"
-            " principal_centavos, multa_centavos, juros_centavos, acrescimos_centavos)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " principal_centavos, multa_centavos, juros_centavos, acrescimos_centavos,"
+            " documento_do_pagador, nome_do_pagador)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     r.tipo.value,
@@ -593,6 +604,8 @@ class Armazenamento:
                     r.data.isoformat(),
                     r.valor_centavos,
                     *_colunas_dos_componentes(r.componentes),
+                    r.documento_do_pagador,
+                    r.nome_do_pagador,
                 )
                 for r in retornos
             ],
@@ -901,6 +914,7 @@ class Armazenamento:
         acompanhamento_do_erp: Iterable[TituloNoAcompanhamento] = (),
         decisoes_da_tela_lidas: Iterable[int] = (),
         conflitos_das_decisoes: Iterable[str] = (),
+        retornos_sem_credito: Iterable[RetornoSemCredito] = (),
     ) -> int:
         cursor = self._conexao.execute(
             "INSERT INTO execucoes (momento, lancamentos_novos) VALUES (?, ?)",
@@ -936,6 +950,14 @@ class Armazenamento:
         self._conexao.executemany(
             "INSERT INTO conflitos_das_decisoes (execucao_id, texto) VALUES (?, ?)",
             [(execucao, conflito) for conflito in conflitos_das_decisoes],
+        )
+        self._conexao.executemany(
+            "INSERT INTO retornos_sem_credito (execucao_id, retorno_id, creditos_do_par, retornos_do_par)"
+            " SELECT ?, id, ?, ? FROM retornos_de_cobranca WHERE tipo = ? AND chave_natural = ?",
+            [
+                (execucao, p.creditos_do_par, p.retornos_do_par, p.retorno.tipo.value, p.retorno.chave_natural)
+                for p in retornos_sem_credito
+            ],
         )
         id_do_titulo = {titulo: self._guardar_titulo(execucao, titulo) for titulo in titulos}
         self._conexao.executemany(
@@ -1083,6 +1105,7 @@ class Armazenamento:
                 if anterior is not None
                 else None
             ),
+            retornos_sem_credito=tuple(self._retornos_sem_credito(execucao)),
         )
         return Resultado(
             resumo=resumo,
@@ -1099,6 +1122,15 @@ class Armazenamento:
             acompanhamento_do_erp=tuple(self._acompanhamento_do_erp(execucao)),
             metricas=Metricas.calcular(self._propostas_decididas(execucao), self._primeiros_pareceres_da_ia(execucao)),
         )
+
+    def _retornos_sem_credito(self, execucao: int) -> Iterator[RetornoSemCredito]:
+        linhas = self._conexao.execute(
+            f"SELECT s.creditos_do_par, s.retornos_do_par, {_COLUNAS_RETORNO} FROM retornos_sem_credito s"
+            " JOIN retornos_de_cobranca r ON r.id = s.retorno_id WHERE s.execucao_id = ? ORDER BY r.id",
+            (execucao,),
+        )
+        for creditos_do_par, retornos_do_par, *retorno in linhas:
+            yield RetornoSemCredito(_retorno(retorno), creditos_do_par, retornos_do_par)
 
     def _execucao_anterior(self, execucao: int) -> int | None:
         (anterior,) = self._conexao.execute("SELECT MAX(id) FROM execucoes WHERE id < ?", (execucao,)).fetchone()
@@ -1386,7 +1418,21 @@ def _componentes(principal: object, multa: object, juros: object, acrescimos: ob
 
 
 def _retorno(linha: Iterable[object]) -> RetornoDeCobranca:
-    tipo, chave_natural, identificador, banco, conta, data, valor, principal, multa, juros, acrescimos = linha
+    (
+        tipo,
+        chave_natural,
+        identificador,
+        banco,
+        conta,
+        data,
+        valor,
+        principal,
+        multa,
+        juros,
+        acrescimos,
+        documento_do_pagador,
+        nome_do_pagador,
+    ) = linha
     return RetornoDeCobranca(
         tipo=TipoDeIdentificador(str(tipo)),
         chave_natural=str(chave_natural),
@@ -1396,6 +1442,8 @@ def _retorno(linha: Iterable[object]) -> RetornoDeCobranca:
         data=date.fromisoformat(str(data)),
         valor_centavos=int(str(valor)),
         componentes=_componentes(principal, multa, juros, acrescimos),
+        documento_do_pagador=None if documento_do_pagador is None else str(documento_do_pagador),
+        nome_do_pagador=None if nome_do_pagador is None else str(nome_do_pagador),
     )
 
 
