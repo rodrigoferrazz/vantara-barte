@@ -12,6 +12,7 @@ from conciliacao.dominio import (
     ArquivoRecusado,
     Canal,
     ChaveNatural,
+    ComponentesDoBoleto,
     ComponentesDoValor,
     Lancamento,
     Natureza,
@@ -21,10 +22,12 @@ from conciliacao.dominio import (
 )
 from conciliacao.normalizacao import (
     FormatoInvalido,
+    campo_numerico,
     centavos_de_valor_com_ponto,
     centavos_de_valor_ptbr,
     cnpj,
     cnpj_sem_pontuacao,
+    data_ddmmaaaa,
     data_do_horario,
     data_iso,
     data_ptbr,
@@ -236,7 +239,103 @@ class PixRecebidos:
         )
 
 
+class RetornoCnab240:
+    nome = "retorno CNAB 240 FEBRABAN"
+    tamanho_do_registro = 240
+    bancos_por_codigo = {"341": "itau"}
+    movimentos_de_liquidacao = frozenset({"06", "17"})
+
+    def reconhece(self, linhas: list[str]) -> bool:
+        return len(linhas[0]) == self.tamanho_do_registro and linhas[0][3:8] == "00000"
+
+    def ler(self, arquivo: Path, linhas: list[str], configuracao: Configuracao) -> ConteudoDoArquivo:
+        conta = _conta_do_extrato(arquivo, configuracao)
+        for numero, linha in enumerate(linhas, start=1):
+            if len(linha) != self.tamanho_do_registro:
+                raise Recusa(f"linha {numero}: {len(linha)} caracteres, o layout tem {self.tamanho_do_registro}")
+        cabecalho = linhas[0]
+        if cabecalho[142] != "2":
+            raise Recusa("linha 1: o cabeçalho de arquivo não é de retorno (código remessa/retorno diferente de 2)")
+        codigo = cabecalho[0:3]
+        banco = self.bancos_por_codigo.get(codigo)
+        if banco is None:
+            raise Recusa(f"retorno do banco de código {codigo}, que não tem adaptador")
+        if banco != conta.banco:
+            raise Recusa(f"retorno do banco {codigo} ({banco}), mas a configuração diz que o arquivo é do banco '{conta.banco}'")
+        for numero, linha in enumerate(linhas, start=1):
+            if linha[0:3] != codigo:
+                raise Recusa(f"linha {numero}: banco {linha[0:3]} diferente do {codigo} do cabeçalho de arquivo")
+        trailer = linhas[-1]
+        if trailer[7] != "9":
+            raise Recusa("falta o trailer de arquivo (registro 9) na última linha")
+        retornos = self._liquidacoes(linhas, conta)
+        registros = _formato(len(linhas), campo_numerico, trailer[23:29])
+        if registros != len(linhas):
+            raise Recusa(f"o trailer de arquivo declara {registros} registros, mas o arquivo tem {len(linhas)}")
+        return ConteudoDoArquivo(retornos=retornos)
+
+    def _liquidacoes(self, linhas: list[str], conta: ContaDeExtrato) -> list[RetornoDeCobranca]:
+        retornos = []
+        lote: str | None = None
+        indice = 1
+        while indice < len(linhas) - 1:
+            numero, linha = indice + 1, linhas[indice]
+            match linha[7], lote:
+                case "1", None:
+                    if linha[8] != "T" or linha[9:11] != "01":
+                        raise Recusa(
+                            f"linha {numero}: cabeçalho de lote não é de retorno de cobrança (operação T, serviço 01)"
+                        )
+                    lote = linha[3:7]
+                case "3", str() if linha[3:7] == lote:
+                    segmento_u = linhas[indice + 1]
+                    if linha[13] != "T":
+                        raise Recusa(f"linha {numero}: Segmento {linha[13]} onde se esperava o Segmento T")
+                    if segmento_u[7] != "3" or segmento_u[13] != "U" or segmento_u[3:7] != lote:
+                        raise Recusa(f"linha {numero}: Segmento T sem o Segmento U seguinte do mesmo lote")
+                    if (retorno := self._liquidacao(numero, linha, segmento_u, conta)) is not None:
+                        retornos.append(retorno)
+                    indice += 1
+                case "5", str() if linha[3:7] == lote:
+                    lote = None
+                case tipo, _:
+                    raise Recusa(f"linha {numero}: registro tipo '{tipo}' do lote {linha[3:7]} fora da sequência")
+            indice += 1
+        if lote is not None:
+            raise Recusa(f"o lote {lote} não tem trailer de lote")
+        return retornos
+
+    def _liquidacao(
+        self, numero: int, segmento_t: str, segmento_u: str, conta: ContaDeExtrato
+    ) -> RetornoDeCobranca | None:
+        movimento = segmento_t[15:17]
+        if segmento_u[15:17] != movimento:
+            raise Recusa(f"linha {numero}: código de movimento {movimento} no Segmento T e {segmento_u[15:17]} no U")
+        if movimento not in self.movimentos_de_liquidacao:
+            return None
+        nosso_numero = segmento_t[37:57].strip()
+        if not nosso_numero:
+            raise Recusa(f"linha {numero}: liquidação sem nosso número")
+        numero_u = numero + 1
+        acrescimos = _formato(numero_u, campo_numerico, segmento_u[17:32])
+        pago = _formato(numero_u, campo_numerico, segmento_u[77:92])
+        if acrescimos > pago:
+            raise Recusa(f"linha {numero_u}: acréscimos maiores que o valor pago")
+        ocorrencia = _formato(numero_u, data_ddmmaaaa, segmento_u[137:145])
+        return RetornoDeCobranca(
+            tipo=TipoDeIdentificador.NOSSO_NUMERO,
+            chave_natural=f"{nosso_numero} {ocorrencia.isoformat()}",
+            identificador=nosso_numero,
+            banco=conta.banco,
+            conta=conta.conta,
+            data=_formato(numero_u, data_ddmmaaaa, segmento_u[145:153]),
+            valor_centavos=_formato(numero_u, campo_numerico, segmento_u[92:107]),
+            componentes=ComponentesDoBoleto(pago - acrescimos, acrescimos) if acrescimos else None,
+        )
+
+
 PIX_RECEBIDOS = PixRecebidos()
+RETORNO_CNAB_240 = RetornoCnab240()
 EXTRATOS: tuple[ExtratoItau, ...] = (ExtratoItau(),)
 ADAPTADORES: tuple[Adaptador, ...] = (ProtheusContasAReceber(), OmieTitulos(), *EXTRATOS)
 
@@ -277,6 +376,8 @@ def _ler_arquivo(arquivo: Path, configuracao: Configuracao) -> ConteudoDoArquivo
         raise Recusa("o arquivo está vazio")
     if configuracao.migracao is not None and PIX_RECEBIDOS.reconhece(conteudo := _json(texto)):
         return PIX_RECEBIDOS.ler(arquivo, conteudo, configuracao)
+    if configuracao.migracao is not None and RETORNO_CNAB_240.reconhece(registros := texto.splitlines()):
+        return RETORNO_CNAB_240.ler(arquivo, registros, configuracao)
     for adaptador in ADAPTADORES:
         linhas = _linhas(texto, adaptador)
         if tuple(linhas[0]) == adaptador.cabecalho:

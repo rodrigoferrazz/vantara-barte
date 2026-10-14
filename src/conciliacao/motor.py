@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Set
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 
@@ -8,6 +8,7 @@ from conciliacao.dominio import (
     ChaveDoIdentificador,
     ChaveNatural,
     Classificacao,
+    ComponentesDoRetorno,
     Destino,
     Franqueado,
     Lancamento,
@@ -22,6 +23,7 @@ from conciliacao.dominio import (
     RetornoDeCobranca,
     TipoDeDecisao,
     TipoDeEvidencia,
+    TipoDeIdentificador,
     Titulo,
     TituloNaCobranca,
     VinculoDeCobranca,
@@ -379,6 +381,7 @@ def lista_de_cobranca(
     classificacoes: Iterable[Classificacao],
     duplicidades: Iterable[PossivelDuplicidade],
     data_de_referencia: date | None,
+    boletos_da_plataforma: Set[tuple[str, str]] = frozenset(),
 ) -> list[TituloNaCobranca]:
     if data_de_referencia is None:
         return []
@@ -400,13 +403,16 @@ def lista_de_cobranca(
         if (titulo.sistema_de_origem, titulo.documento) not in em_duplicidade
         and (titulo in na_fila or titulo not in propostos)
         and titulo.valor_centavos > 0
-        and data_de_referencia > _cobravel_depois_de(titulo)
+        and data_de_referencia
+        > _cobravel_depois_de(titulo, (titulo.sistema_de_origem, titulo.documento) in boletos_da_plataforma)
     ]
 
 
-def _cobravel_depois_de(titulo: Titulo) -> date:
+def _cobravel_depois_de(titulo: Titulo, com_boleto_da_plataforma: bool) -> date:
     efetivo = vencimento_efetivo(titulo.vencimento)
-    return somar_dias_uteis(efetivo, _DIAS_UTEIS_DE_COMPENSACAO_DO_BOLETO) if titulo.nosso_numero else efetivo
+    if titulo.nosso_numero or com_boleto_da_plataforma:
+        return somar_dias_uteis(efetivo, _DIAS_UTEIS_DE_COMPENSACAO_DO_BOLETO)
+    return efetivo
 
 
 def _possivel_duplicidade(franqueado: str, vencimento: date, valor: int, grupo: list[Titulo]) -> PossivelDuplicidade:
@@ -430,19 +436,45 @@ def _classificar(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
             explicacao="Débito do Extrato; não é Crédito de Franqueado.",
         )
     retorno = abertos.retornos.get(lancamento.chave_natural)
-    if retorno is None:
-        return _sem_identificador_de_cobranca(lancamento, abertos)
-    vinculo = abertos.vinculos.get(retorno.chave_do_identificador)
+    if retorno is not None:
+        return _pelo_retorno(lancamento, retorno, abertos)
+    vinculo = abertos.vinculos.get((TipoDeIdentificador.NOSSO_NUMERO, lancamento.documento))
     if vinculo is None:
-        sem_vinculo = _sem_identificador_de_cobranca(lancamento, abertos)
-        return replace(
-            sem_vinculo,
-            explicacao=f"{sem_vinculo.explicacao} O {retorno.tipo.value} {retorno.identificador} do Retorno de cobrança "
-            "não tem vínculo na plataforma; o Crédito segue sem Identificador de cobrança.",
-        )
+        return _sem_identificador_de_cobranca(lancamento, abertos)
+    return _pelo_vinculo(lancamento, vinculo, None, abertos)
+
+
+def _pelo_retorno(lancamento: Lancamento, retorno: RetornoDeCobranca, abertos: _Titulos) -> Classificacao:
+    vinculo = abertos.vinculos.get(retorno.chave_do_identificador)
+    if vinculo is not None:
+        return _pelo_vinculo(lancamento, vinculo, retorno.componentes, abertos)
+    do_protheus = (
+        abertos.por_nosso_numero.get(retorno.identificador, [])
+        if retorno.tipo is TipoDeIdentificador.NOSSO_NUMERO
+        else []
+    )
+    if len(do_protheus) == 1:
+        return _com_componentes(_por_nosso_numero(lancamento, do_protheus[0], abertos.encargo), retorno.componentes)
+    sem_vinculo = _sem_identificador_de_cobranca(lancamento, abertos)
+    de_titulo = (
+        " nem é nosso número de um único Título em aberto" if retorno.tipo is TipoDeIdentificador.NOSSO_NUMERO else ""
+    )
+    return replace(
+        sem_vinculo,
+        explicacao=f"{sem_vinculo.explicacao} O {retorno.tipo.value} {retorno.identificador} do Retorno de cobrança "
+        f"não tem vínculo na plataforma{de_titulo}; o Crédito segue sem Identificador de cobrança.",
+    )
+
+
+def _pelo_vinculo(
+    lancamento: Lancamento,
+    vinculo: VinculoDeCobranca,
+    componentes: ComponentesDoRetorno | None,
+    abertos: _Titulos,
+) -> Classificacao:
     if (vinculo.sistema_de_origem, vinculo.documento) in abertos.titulos_rejeitados:
         return _sem_identificador_de_cobranca(lancamento, abertos)
-    return _por_identificador(lancamento, retorno, vinculo, abertos)
+    return _por_identificador(lancamento, vinculo, componentes, abertos)
 
 
 def _sem_identificador_de_cobranca(lancamento: Lancamento, abertos: _Titulos) -> Classificacao:
@@ -852,7 +884,10 @@ def _por_nosso_numero(lancamento: Lancamento, titulo: Titulo, encargo: Parametro
 
 
 def _por_identificador(
-    lancamento: Lancamento, retorno: RetornoDeCobranca, vinculo: VinculoDeCobranca, abertos: _Titulos
+    lancamento: Lancamento,
+    vinculo: VinculoDeCobranca,
+    componentes: ComponentesDoRetorno | None,
+    abertos: _Titulos,
 ) -> Classificacao:
     titulo = abertos.por_chave.get((vinculo.sistema_de_origem, vinculo.documento))
     if titulo is None:
@@ -875,11 +910,16 @@ def _por_identificador(
         RegraDaProposta.IDENTIFICADOR_E_VALOR,
         abertos.encargo,
     )
-    if retorno.componentes is None:
+    return _com_componentes(classificacao, componentes)
+
+
+def _com_componentes(
+    classificacao: Classificacao, componentes: ComponentesDoRetorno | None
+) -> Classificacao:
+    if componentes is None:
         return classificacao
     return replace(
-        classificacao,
-        explicacao=f"{classificacao.explicacao} O Retorno de cobrança separa {retorno.componentes.descrever()}.",
+        classificacao, explicacao=f"{classificacao.explicacao} O Retorno de cobrança separa {componentes.descrever()}."
     )
 
 

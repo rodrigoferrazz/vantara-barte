@@ -50,7 +50,7 @@ def _emitir(
     _conciliar(pasta, armazenamento, configuracao)
     porta = PortaSimulada()
     emitir_cobrancas(armazenamento, configuracao, porta)
-    return {cobranca.documento: cobranca.txid for cobranca in porta.emitidas}
+    return {cobranca.documento: cobranca.txid for cobranca in porta.emitidas if cobranca.txid is not None}
 
 
 def _pago(pasta: Path, txid: str, valor: str, historico: str = "PIX RECEBIDO FULANO", **componentes: str) -> None:

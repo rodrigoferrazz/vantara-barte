@@ -1,7 +1,10 @@
 import argparse
 import sys
+from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import date
+from itertools import count
 from pathlib import Path
 
 from conciliacao.acompanhamento import chave_do_titulo, saldos
@@ -10,7 +13,7 @@ from conciliacao.calendario import vencimento_efetivo
 from conciliacao.configuracao import Configuracao, ConfiguracaoInvalida, carregar_configuracao
 from conciliacao.dominio import OrigemDoIdentificador, TipoDeIdentificador, Titulo, VinculoDeCobranca
 from conciliacao.execucao import calcular_data_de_referencia, possiveis_duplicidades_nao_decididas
-from conciliacao.identificadores import gerar_txid
+from conciliacao.identificadores import FaixaDeNossoNumeroEsgotada, gerar_txid, nossos_numeros_livres
 from conciliacao.motor import chaves_em_duplicidade
 from conciliacao.porta import CobrancaIdentificada, PortaDeCobranca, PortaSimulada
 
@@ -27,37 +30,47 @@ def emitir_cobrancas(armazenamento: Armazenamento, configuracao: Configuracao, p
     if migracao is None or referencia is None:
         return Emissao(referencia, ())
     with armazenamento.transacao():
-        vinculos = {
-            (v.sistema_de_origem, v.documento): v
-            for v in armazenamento.vinculos_de_cobranca()
-            if v.tipo is TipoDeIdentificador.TXID
-        }
+        existentes = armazenamento.vinculos_de_cobranca()
+        vinculos = {(v.tipo, v.sistema_de_origem, v.documento): v for v in existentes}
         enviados = armazenamento.vinculos_enviados()
-        gerados = armazenamento.identificadores_gerados(TipoDeIdentificador.TXID)
-        a_enviar = []
+        geradores: dict[TipoDeIdentificador, Iterator[str]] = {
+            TipoDeIdentificador.TXID: map(
+                gerar_txid, count(armazenamento.identificadores_gerados(TipoDeIdentificador.TXID) + 1)
+            )
+        }
+        if migracao.boleto is not None:
+            usados = {v.identificador for v in existentes if v.tipo is TipoDeIdentificador.NOSSO_NUMERO}
+            geradores[TipoDeIdentificador.NOSSO_NUMERO] = nossos_numeros_livres(migracao.boleto, usados)
+        a_enviar: dict[tuple[str, str, int, date], list[VinculoDeCobranca]] = defaultdict(list)
         for titulo in _titulos_em_aberto_fora_de_duplicidade(armazenamento):
             if titulo.franqueado not in migracao.franqueados or vencimento_efetivo(titulo.vencimento) < referencia:
                 continue
-            vinculo = vinculos.get(chave_do_titulo(titulo))
-            if vinculo is None:
-                gerados += 1
-                vinculo = _vinculo(titulo, gerar_txid(gerados))
-                armazenamento.registrar_vinculo(vinculo)
-            if vinculo.chave not in enviados:
-                a_enviar.append(vinculo)
+            for tipo, gerador in geradores.items():
+                if tipo is TipoDeIdentificador.NOSSO_NUMERO and titulo.nosso_numero is not None:
+                    continue
+                vinculo = vinculos.get((tipo, *chave_do_titulo(titulo)))
+                if vinculo is None:
+                    vinculo = _vinculo(titulo, tipo, next(gerador))
+                    armazenamento.registrar_vinculo(vinculo)
+                if vinculo.chave not in enviados:
+                    a_enviar[(*chave_do_titulo(titulo), vinculo.valor_centavos, vinculo.vencimento)].append(vinculo)
     emitidas = []
-    for vinculo in a_enviar:
+    for do_titulo in a_enviar.values():
+        identificadores = {vinculo.tipo: vinculo.identificador for vinculo in do_titulo}
+        primeiro = do_titulo[0]
         cobranca = CobrancaIdentificada(
-            sistema_de_origem=vinculo.sistema_de_origem,
-            documento=vinculo.documento,
-            valor_centavos=vinculo.valor_centavos,
-            vencimento=vinculo.vencimento,
-            cnpj=vinculo.cnpj,
-            txid=vinculo.identificador,
+            sistema_de_origem=primeiro.sistema_de_origem,
+            documento=primeiro.documento,
+            valor_centavos=primeiro.valor_centavos,
+            vencimento=primeiro.vencimento,
+            cnpj=primeiro.cnpj,
+            txid=identificadores.get(TipoDeIdentificador.TXID),
+            nosso_numero=identificadores.get(TipoDeIdentificador.NOSSO_NUMERO),
         )
         porta.emitir(cobranca)
         with armazenamento.transacao():
-            armazenamento.registrar_envio(vinculo)
+            for vinculo in do_titulo:
+                armazenamento.registrar_envio(vinculo)
         emitidas.append(cobranca)
     return Emissao(referencia, tuple(emitidas))
 
@@ -74,10 +87,10 @@ def _titulos_em_aberto_fora_de_duplicidade(armazenamento: Armazenamento) -> list
     ]
 
 
-def _vinculo(titulo: Titulo, txid: str) -> VinculoDeCobranca:
+def _vinculo(titulo: Titulo, tipo: TipoDeIdentificador, identificador: str) -> VinculoDeCobranca:
     return VinculoDeCobranca(
-        tipo=TipoDeIdentificador.TXID,
-        identificador=txid,
+        tipo=tipo,
+        identificador=identificador,
         origem=OrigemDoIdentificador.PLATAFORMA,
         sistema_de_origem=titulo.sistema_de_origem,
         documento=titulo.documento,
@@ -108,9 +121,14 @@ def main(argumentos: list[str] | None = None) -> int:
         print("Sem a seção [migracao] na configuração, nenhum Franqueado é migrado; nenhuma cobrança emitida.")
         return 0
 
+    if configuracao.migracao.boleto is None:
+        print("Sem a seção [migracao.boleto], não há faixa de nosso número: os Títulos sem nosso número recebem só Pix.")
     armazenamento = Armazenamento(opcoes.estado)
     try:
         emissao = emitir_cobrancas(armazenamento, configuracao, PortaSimulada())
+    except FaixaDeNossoNumeroEsgotada as erro:
+        print(f"Nenhuma cobrança emitida: {erro}.", file=sys.stderr)
+        return 2
     finally:
         armazenamento.fechar()
 

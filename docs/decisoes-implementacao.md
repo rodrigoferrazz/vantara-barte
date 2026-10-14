@@ -757,3 +757,41 @@ Decisões tomadas durante a implementação que não estavam na spec, no `CONTEX
 - **Decisão:** nada muda no código: a confirmação de um Crédito com evidência só de Identificador de cobrança registra o nome do Extrato como as confirmações por CNPJ da fase 1, sem "por nome", e por isso nunca cria Pagador conhecido.
 - **Por quê:** história 30 e fase 1, história 57; o teste fixa o comportamento.
 - **Alternativas:** não registrar nada para o identificador (deixaria de marcar o nome como confirmado para mais de um Franqueado quando ele também paga outro).
+
+## Fase 2, ticket 03: faixa de nosso número
+
+- **Decisão:** a faixa fica em `[migracao.boleto]`, com `banco`, `conta`, `nosso_numero_inicial` e `nosso_numero_final`: só dígitos, até 20 (o tamanho do nosso número no Segmento T), o mesmo número de dígitos nos dois extremos e inicial menor ou igual ao final; banco e conta precisam estar numa `[[contas]]`. O nosso número gerado é o menor número da faixa, com os zeros à esquerda do tamanho dela, que ainda não está em nenhum vínculo; como vínculos nunca são apagados, nada é reaproveitado, mesmo que a faixa mude. Faixa esgotada desfaz a emissão inteira (nenhum vínculo novo, nada enviado) e o comando avisa. Sem `[migracao.boleto]`, os Títulos sem nosso número recebem só o Pix, e o comando avisa; configurada a faixa depois, a emissão seguinte manda só o boleto que falta.
+- **Por quê:** spec, módulos 1 e 2 (faixa do beneficiário por conta, únicos e nunca reaproveitados). Uma conta só porque a spec não diz como escolher a conta beneficiária de cada Título. O tamanho fixo pela faixa é o que faz o nosso número do Extrato bater com o do vínculo.
+- **Alternativas:** sequencial pela quantidade gerada, como o txid (repetiria números se a faixa mudar para uma que se sobrepõe à anterior); faixa obrigatória com `[migracao]` (quebraria a emissão só de Pix do ticket 01).
+- **Ponto em aberto:** mais de uma conta beneficiária com faixas próprias. Também é premissa que a faixa é reservada pelo banco à plataforma: se um nosso número dela aparecer também num Título do Protheus, o Extrato com esse documento é resolvido pelo vínculo da plataforma.
+
+## Fase 2, ticket 03: boleto e Pix na emissão
+
+- **Decisão:** cada Título em aberto elegível tem um vínculo de txid e, se a exportação não traz nosso número, um vínculo de nosso número (únicos por tipo e Título). A porta recebe uma cobrança por Título com os identificadores ainda não enviados (`txid` e `nosso_numero`, cada um podendo faltar), e os dois são marcados como enviados juntos. Título que ganhou nosso número no Protheus antes de o boleto da plataforma ser enviado não recebe esse boleto. Título com boleto da plataforma já enviado que depois aparece com nosso número no Protheus fica com os dois; a plataforma não cancela cobrança (fora do escopo da spec).
+- **Por quê:** ADR 0008 e spec, módulo 3 e história 3 (nenhum Título com dois boletos registrados) e módulo 4 (emitir Título, valor, vencimento, CNPJ e os identificadores). Mandar só o que falta evita reemitir o Pix quando o boleto chega depois. Identificadores de um mesmo Título com valor ou vencimento emitidos diferentes (reenvio depois de falha da porta) vão em cobranças separadas, cada uma com o valor do seu vínculo.
+- **Alternativas:** uma chamada da porta por identificador (o boleto com QR Pix, comum nos bancos, é uma emissão só).
+
+## Fase 2, ticket 03: adaptador de retorno CNAB 240
+
+- **Decisão:** com `[migracao]`, um arquivo é retorno CNAB 240 quando a primeira linha tem 240 caracteres com lote `0000` e registro `0`. A partir daí tudo é conferido e qualquer desvio recusa o arquivo inteiro com o motivo: toda linha com 240 caracteres, cabeçalho de arquivo de retorno (posição 143 igual a 2), código do banco conhecido (341, Itaú) e igual ao da `[[contas]]` que casa com o nome do arquivo e o mesmo em todas as linhas, lotes de cobrança de retorno (operação T, serviço 01) com detalhes Segmento T seguido do Segmento U do mesmo lote e mesmo código de movimento, trailer de lote, trailer de arquivo com a quantidade de registros. Só os movimentos 06 (liquidação) e 17 (liquidação após baixa ou de título não registrado) viram Retorno; os demais são ignorados. O Retorno tem o nosso número do Segmento T (sem os brancos), a data de efetivação do crédito e o valor líquido creditado do Segmento U, e chave natural nosso número mais data de ocorrência. A versão do layout no cabeçalho não é conferida, e outro segmento (como o Y de alguns bancos) recusa o arquivo.
+- **Por quê:** ADR 0005 e 0007 e spec, módulo 6 e história 15. O Retorno é ligado ao Crédito por conta, data e valor, e o que entra na conta é o valor líquido na data do crédito. A chave natural é a do ticket 04. Variações de banco, inclusive de versão, entram como adaptadores próprios.
+- **Alternativas:** valor pago pelo pagador (não casa com o Extrato quando o banco desconta tarifa no crédito); só o movimento 06 (perderia dinheiro de boleto pago depois da baixa).
+
+## Fase 2, ticket 03: multa e juros do Segmento U
+
+- **Decisão:** o Segmento U da FEBRABAN traz multa, juros e encargos num campo só ("acréscimos"), então a explicação mostra "O Retorno de cobrança separa principal ... e acréscimos (juros, multa e encargos) ...", com principal igual ao valor pago menos os acréscimos. A frase só aparece quando os acréscimos são maiores que zero. A regra de valor continua a do Encargo, sem usar os componentes.
+- **Por quê:** o critério do ticket pede multa e juros separados, mas o leiaute público não os separa; separar seria inventar a divisão (por exemplo, pela multa configurada). Fica o que o banco informa.
+- **Alternativas:** dividir os acréscimos pela multa do Encargo (o valor separado não viria do Retorno); mostrar acréscimos zero em todo boleto pago em dia (ruído).
+- **Ponto em aberto:** se algum banco separar multa e juros no retorno dele, isso entra no adaptador desse banco.
+
+## Fase 2, ticket 03: boleto da plataforma no motor
+
+- **Decisão:** o nosso número da plataforma é encontrado pelo vínculo, venha do documento do Extrato ou de um Retorno CNAB, e segue a mesma regra de valor do nosso número do Protheus, com a evidência "Identificador de cobrança", a regra "Identificador de cobrança + valor exato ou dentro do Encargo" e a explicação "nosso número ... (Identificador de cobrança de origem plataforma) é do Título ...", como o txid. O Retorno CNAB de um boleto do Protheus (nosso número de um único Título em aberto, sem vínculo) leva à regra da fase 1 sem nenhuma mudança (evidência "nosso número") e só acrescenta os acréscimos à explicação; isso também identifica o Crédito de boleto do Protheus que chega no Extrato sem o documento. Vínculos de origem Protheus não são gravados: o nosso número do Protheus vem da exportação. Pagamento parcial não precisa de marca de autorização: valor abaixo do Título é Diferença a menor e vai para a Fila com "valor não fecha" apontando o Título, como qualquer identificador.
+- **Por quê:** spec, história 31 e módulo 8, e o critério do ticket de manter a regra do Protheus. A evidência separa o que a plataforma emitiu do que veio do Protheus, e a explicação da fase 1 não muda. Copiar o nosso número do Protheus para os vínculos seria uma terceira versão do Título (ADR 0004). O retorno CNAB não diz se o parcial foi autorizado; a regra de valor já leva o parcial para a Fila.
+- **Alternativas:** evidência "nosso número" também para o boleto da plataforma (a Analista e a análise de impacto não distinguiriam a origem); gravar vínculo de origem Protheus na emissão, como sugere o módulo 11.
+
+## Fase 2, ticket 03: janela de compensação do boleto da plataforma
+
+- **Decisão:** na Lista de cobrança, Título com boleto da plataforma enviado tem a mesma janela de 2 dias úteis de compensação do Título com nosso número do Protheus.
+- **Por quê:** a janela do ticket 09 da fase 1 existe porque o boleto leva dias para cair na conta; vale para qualquer boleto. Sem ela, um Título pago por boleto da plataforma no vencimento iria para a cobrança antes de o dinheiro chegar.
+- **Alternativas:** janela só para o nosso número do Protheus (aplicaria a regra pelo exemplo, não pelo motivo).

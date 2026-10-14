@@ -55,7 +55,7 @@ def _emitir(
 
 
 def _txids(porta: PortaSimulada) -> dict[str, str]:
-    return {cobranca.documento: cobranca.txid for cobranca in porta.emitidas}
+    return {cobranca.documento: cobranca.txid for cobranca in porta.emitidas if cobranca.txid is not None}
 
 
 def test_sem_configuracao_de_migracao_nada_da_fase_2_executa(pasta: Path, armazenamento: Armazenamento) -> None:
@@ -155,7 +155,7 @@ def test_txid_alfanumerico_de_26_a_35_caracteres_unico_e_nunca_reaproveitado(
     segunda = PortaSimulada()
     emitir_cobrancas(armazenamento, configuracao_com_migracao(), segunda)
 
-    txids = [cobranca.txid for cobranca in (*primeira.emitidas, *segunda.emitidas)]
+    txids = [cobranca.txid for cobranca in (*primeira.emitidas, *segunda.emitidas) if cobranca.txid is not None]
     assert len(txids) == 4
     assert all(_TXID.fullmatch(txid) for txid in txids)
     assert len(set(txids)) == 4
@@ -205,6 +205,7 @@ def test_porta_recebe_so_titulo_valor_vencimento_cnpj_e_identificador(pasta: Pat
         "vencimento": date(2025, 3, 10),
         "cnpj": "10200300000140",
         "txid": cobranca.txid,
+        "nosso_numero": None,
     }
 
 

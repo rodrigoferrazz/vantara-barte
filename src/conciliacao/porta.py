@@ -10,7 +10,8 @@ class CobrancaIdentificada:
     valor_centavos: int
     vencimento: date
     cnpj: str
-    txid: str
+    txid: str | None
+    nosso_numero: str | None
 
 
 class PortaDeCobranca(Protocol):

@@ -11,6 +11,8 @@ from conciliacao.dominio import (
     ArquivoRecusado,
     ChaveDoIdentificador,
     OrigemDoIdentificador,
+    ComponentesDoBoleto,
+    ComponentesDoRetorno,
     ComponentesDoValor,
     RetornoDeCobranca,
     TipoDeIdentificador,
@@ -289,6 +291,7 @@ CREATE TABLE IF NOT EXISTS retornos_de_cobranca (
     principal_centavos INTEGER,
     multa_centavos INTEGER,
     juros_centavos INTEGER,
+    acrescimos_centavos INTEGER,
     UNIQUE (tipo, chave_natural)
 );
 CREATE TABLE IF NOT EXISTS enriquecimentos (
@@ -307,7 +310,7 @@ _COLUNAS_VINCULO = (
 )
 _COLUNAS_RETORNO = (
     "r.tipo, r.chave_natural, r.identificador, r.banco, r.conta, r.data, r.valor_centavos,"
-    " r.principal_centavos, r.multa_centavos, r.juros_centavos"
+    " r.principal_centavos, r.multa_centavos, r.juros_centavos, r.acrescimos_centavos"
 )
 _COLUNAS_TITULO = (
     "t.sistema_de_origem, t.documento, t.nome_do_franqueado, t.cnpj, t.nosso_numero, t.vencimento, t.valor_centavos"
@@ -578,7 +581,8 @@ class Armazenamento:
         self._conexao.executemany(
             "INSERT OR IGNORE INTO retornos_de_cobranca"
             " (tipo, chave_natural, identificador, banco, conta, data, valor_centavos,"
-            " principal_centavos, multa_centavos, juros_centavos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " principal_centavos, multa_centavos, juros_centavos, acrescimos_centavos)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     r.tipo.value,
@@ -588,11 +592,7 @@ class Armazenamento:
                     r.conta,
                     r.data.isoformat(),
                     r.valor_centavos,
-                    *(
-                        (r.componentes.principal_centavos, r.componentes.multa_centavos, r.componentes.juros_centavos)
-                        if r.componentes
-                        else (None, None, None)
-                    ),
+                    *_colunas_dos_componentes(r.componentes),
                 )
                 for r in retornos
             ],
@@ -1365,8 +1365,28 @@ def _vinculo(linha: Iterable[object]) -> VinculoDeCobranca:
     )
 
 
+def _colunas_dos_componentes(
+    componentes: ComponentesDoRetorno | None,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    match componentes:
+        case ComponentesDoValor():
+            return componentes.principal_centavos, componentes.multa_centavos, componentes.juros_centavos, None
+        case ComponentesDoBoleto():
+            return componentes.principal_centavos, None, None, componentes.acrescimos_centavos
+        case None:
+            return None, None, None, None
+
+
+def _componentes(principal: object, multa: object, juros: object, acrescimos: object) -> ComponentesDoRetorno | None:
+    if principal is None:
+        return None
+    if acrescimos is not None:
+        return ComponentesDoBoleto(int(str(principal)), int(str(acrescimos)))
+    return ComponentesDoValor(int(str(principal)), int(str(multa)), int(str(juros)))
+
+
 def _retorno(linha: Iterable[object]) -> RetornoDeCobranca:
-    tipo, chave_natural, identificador, banco, conta, data, valor, principal, multa, juros = linha
+    tipo, chave_natural, identificador, banco, conta, data, valor, principal, multa, juros, acrescimos = linha
     return RetornoDeCobranca(
         tipo=TipoDeIdentificador(str(tipo)),
         chave_natural=str(chave_natural),
@@ -1375,7 +1395,7 @@ def _retorno(linha: Iterable[object]) -> RetornoDeCobranca:
         conta=str(conta),
         data=date.fromisoformat(str(data)),
         valor_centavos=int(str(valor)),
-        componentes=None if principal is None else ComponentesDoValor(int(str(principal)), int(str(multa)), int(str(juros))),
+        componentes=_componentes(principal, multa, juros, acrescimos),
     )
 
 

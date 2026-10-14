@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from conciliacao.configuracao import Configuracao, ConfiguracaoDeMigracao, ContaDeExtrato
+from conciliacao.configuracao import Configuracao, ConfiguracaoDeMigracao, ContaDeExtrato, FaixaDeNossoNumero
 from conciliacao.encargo import ParametrosDeEncargo
 
 CABECALHO_PROTHEUS = "cliente;cnpj;unidade;documento;nosso_numero;tipo;emissao;vencimento;valor;status"
@@ -104,6 +104,18 @@ def configuracao_com_migracao(
     )
 
 
+def configuracao_com_boleto(
+    inicial: str = "0000700001", final: str = "0000700999", migrados: tuple[str, ...] = (FRANQUEADO_DOS_TITULOS,)
+) -> Configuracao:
+    base = configuracao_com_migracao(migrados)
+    assert base.migracao is not None
+    return replace(
+        base,
+        contas=(*base.contas, ContaDeExtrato(padrao="retorno_cnab*.ret", banco="itau", conta="1234-5")),
+        migracao=replace(base.migracao, boleto=FaixaDeNossoNumero(banco="itau", conta="1234-5", inicial=inicial, final=final)),
+    )
+
+
 def pix_recebido(
     txid: str | None,
     valor: str,
@@ -141,4 +153,75 @@ def escrever_pix_recebidos(pasta: Path, recebidos: list[dict[str, object]], nome
         "pix": recebidos,
     }
     caminho.write_text(json.dumps(conteudo), encoding="utf-8")
+    return caminho
+
+
+@dataclass(frozen=True)
+class MovimentoCnab:
+    nosso_numero: str
+    valor_nominal: int
+    valor_pago: int
+    acrescimos: int = 0
+    movimento: str = "06"
+    ocorrencia: str = "12032025"
+    credito: str = "12032025"
+    vencimento: str = "10032025"
+    pagador_cnpj: str = "10200300000140"
+    pagador_nome: str = "FRANQUIA TESTE LTDA"
+
+
+def _registro(*campos: tuple[int, int, str | int]) -> str:
+    linha = [" "] * 240
+    for inicio, fim, valor in campos:
+        tamanho = fim - inicio + 1
+        texto = f"{valor:0{tamanho}d}" if isinstance(valor, int) else valor.ljust(tamanho)
+        assert len(texto) == tamanho, (inicio, fim, valor)
+        linha[inicio - 1 : fim] = texto
+    return "".join(linha)
+
+
+def linhas_do_retorno_cnab(movimentos: list[MovimentoCnab], banco: str = "341") -> list[str]:
+    detalhes = []
+    for numero, movimento in enumerate(movimentos):
+        detalhes.append(
+            _registro(
+                (1, 3, banco), (4, 7, 1), (8, 8, "3"), (9, 13, 2 * numero + 1), (14, 14, "T"),
+                (16, 17, movimento.movimento), (38, 57, movimento.nosso_numero), (74, 81, movimento.vencimento),
+                (82, 96, movimento.valor_nominal), (133, 133, "2"), (134, 148, f"{movimento.pagador_cnpj:0>15}"),
+                (149, 188, movimento.pagador_nome),
+            )
+        )
+        detalhes.append(
+            _registro(
+                (1, 3, banco), (4, 7, 1), (8, 8, "3"), (9, 13, 2 * numero + 2), (14, 14, "U"),
+                (16, 17, movimento.movimento), (18, 32, movimento.acrescimos), (33, 47, 0), (48, 62, 0), (63, 77, 0),
+                (78, 92, movimento.valor_pago), (93, 107, movimento.valor_pago), (138, 145, movimento.ocorrencia),
+                (146, 153, movimento.credito),
+            )
+        )
+    return [
+        _registro(
+            (1, 3, banco), (4, 7, "0000"), (8, 8, "0"), (18, 18, "2"), (19, 32, "11222333000144"),
+            (73, 102, "VANTARA FRANQUIAS"), (103, 132, "BANCO ITAU SA"), (143, 143, "2"), (144, 151, "14032025"),
+            (158, 163, 1), (164, 166, "103"),
+        ),
+        _registro(
+            (1, 3, banco), (4, 7, 1), (8, 8, "1"), (9, 9, "T"), (10, 11, "01"), (14, 16, "060"), (18, 18, "2"),
+            (19, 33, "011222333000144"), (74, 103, "VANTARA FRANQUIAS"), (192, 199, "14032025"),
+        ),
+        *detalhes,
+        _registro((1, 3, banco), (4, 7, 1), (8, 8, "5"), (18, 23, len(detalhes) + 2)),
+        _registro((1, 3, banco), (4, 7, "9999"), (8, 8, "9"), (18, 23, 1), (24, 29, len(detalhes) + 4)),
+    ]
+
+
+def escrever_retorno_cnab(
+    pasta: Path, movimentos: list[MovimentoCnab], nome: str = "retorno_cnab.ret", banco: str = "341"
+) -> Path:
+    return escrever_linhas(pasta, linhas_do_retorno_cnab(movimentos, banco), nome)
+
+
+def escrever_linhas(pasta: Path, linhas: list[str], nome: str) -> Path:
+    caminho = pasta / nome
+    caminho.write_text("\r\n".join(linhas) + "\r\n", encoding="utf-8")
     return caminho

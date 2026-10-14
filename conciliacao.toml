@@ -31,12 +31,26 @@ tempo_limite_segundos = 120
 limite_de_queda_pontos_percentuais = 10
 
 # Fase 2 (Cobrança identificada). Sem esta seção nada da fase 2 executa: o comando emitir-cobrancas não emite e
-# arquivos de Pix recebidos são recusados. Os Franqueados migrados são dados pela raiz do CNPJ (8 dígitos). O arquivo de
-# Pix recebidos da API Pix (JSON) precisa casar com uma [[contas]] própria, que diz o banco e a conta que recebeu.
+# arquivos de Pix recebidos e de retorno CNAB 240 são recusados. Os Franqueados migrados são dados pela raiz do CNPJ
+# (8 dígitos). O arquivo de Pix recebidos da API Pix (JSON) e o retorno CNAB 240 precisam casar cada um com uma
+# [[contas]] própria, que diz o banco e a conta. Em [migracao.boleto] fica a faixa de nosso número que o banco reservou
+# para a plataforma na conta beneficiária (só dígitos, mesmo tamanho nos dois extremos); sem ela, os Títulos sem nosso
+# número do Protheus recebem só Pix.
 # [migracao]
 # franqueados = ["00000000"]
 #
+# [migracao.boleto]
+# banco = "itau"
+# conta = "conta-principal-cobranca"
+# nosso_numero_inicial = "0000700001"
+# nosso_numero_final = "0000799999"
+#
 # [[contas]]
 # padrao = "*pix_recebidos*.json"
+# banco = "itau"
+# conta = "conta-principal-cobranca"
+#
+# [[contas]]
+# padrao = "*retorno_cnab*.ret"
 # banco = "itau"
 # conta = "conta-principal-cobranca"

@@ -208,6 +208,7 @@ class Lancamento:
 
 class TipoDeIdentificador(StrEnum):
     TXID = "txid"
+    NOSSO_NUMERO = "nosso número"
 
 
 class OrigemDoIdentificador(StrEnum):
@@ -250,6 +251,21 @@ class ComponentesDoValor:
 
 
 @dataclass(frozen=True)
+class ComponentesDoBoleto:
+    principal_centavos: int
+    acrescimos_centavos: int
+
+    def descrever(self) -> str:
+        return (
+            f"principal {formatar_reais(self.principal_centavos)} e acréscimos (juros, multa e encargos) "
+            f"{formatar_reais(self.acrescimos_centavos)}"
+        )
+
+
+type ComponentesDoRetorno = ComponentesDoValor | ComponentesDoBoleto
+
+
+@dataclass(frozen=True)
 class RetornoDeCobranca:
     tipo: TipoDeIdentificador
     chave_natural: str
@@ -258,7 +274,7 @@ class RetornoDeCobranca:
     conta: str
     data: date
     valor_centavos: int
-    componentes: ComponentesDoValor | None = None
+    componentes: ComponentesDoRetorno | None = None
 
     @property
     def chave_do_identificador(self) -> ChaveDoIdentificador:

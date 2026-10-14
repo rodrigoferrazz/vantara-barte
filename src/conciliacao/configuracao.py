@@ -26,8 +26,17 @@ class ConfiguracaoDaIa:
 
 
 @dataclass(frozen=True)
+class FaixaDeNossoNumero:
+    banco: str
+    conta: str
+    inicial: str
+    final: str
+
+
+@dataclass(frozen=True)
 class ConfiguracaoDeMigracao:
     franqueados: frozenset[str]
+    boleto: FaixaDeNossoNumero | None = None
 
 
 @dataclass(frozen=True)
@@ -49,25 +58,28 @@ def carregar_configuracao(caminho: Path) -> Configuracao:
     contas = dados.get("contas")
     if not isinstance(contas, list) or not contas:
         raise ConfiguracaoInvalida(f"{caminho}: faltam as [[contas]] com padrao, banco e conta")
+    contas_lidas = tuple(_conta(caminho, conta) for conta in contas)
     return Configuracao(
-        contas=tuple(_conta(caminho, conta) for conta in contas),
+        contas=contas_lidas,
         encargo=_encargo(caminho, dados.get("encargo", {})),
         limite_de_combinacoes=_limite_de_combinacoes(caminho, dados.get("somas", {})),
         ia=_ia(caminho, dados["ia"]) if "ia" in dados else None,
         limite_de_queda=_limite_de_queda(caminho, dados.get("resumo", {})),
-        migracao=_migracao(caminho, dados["migracao"]) if "migracao" in dados else None,
+        migracao=_migracao(caminho, dados["migracao"], contas_lidas) if "migracao" in dados else None,
     )
 
 
 _RAIZ_DO_CNPJ = re.compile(r"\d{8}")
 
 
-def _migracao(caminho: Path, migracao: object) -> ConfiguracaoDeMigracao:
+def _migracao(caminho: Path, migracao: object, contas: tuple[ContaDeExtrato, ...]) -> ConfiguracaoDeMigracao:
     if not isinstance(migracao, dict):
         raise ConfiguracaoInvalida(f"{caminho}: [migracao] precisa ser uma seção")
-    desconhecidos = sorted(set(migracao) - {"franqueados"})
+    desconhecidos = sorted(set(migracao) - {"franqueados", "boleto"})
     if desconhecidos:
-        raise ConfiguracaoInvalida(f"{caminho}: [migracao] não conhece {', '.join(desconhecidos)}; use franqueados")
+        raise ConfiguracaoInvalida(
+            f"{caminho}: [migracao] não conhece {', '.join(desconhecidos)}; use franqueados e boleto"
+        )
     franqueados = migracao.get("franqueados")
     if not isinstance(franqueados, list) or not all(
         isinstance(raiz, str) and _RAIZ_DO_CNPJ.fullmatch(raiz) for raiz in franqueados
@@ -75,7 +87,49 @@ def _migracao(caminho: Path, migracao: object) -> ConfiguracaoDeMigracao:
         raise ConfiguracaoInvalida(
             f"{caminho}: [migracao] franqueados precisa ser uma lista de raízes de CNPJ, 8 dígitos sem pontuação"
         )
-    return ConfiguracaoDeMigracao(franqueados=frozenset(franqueados))
+    return ConfiguracaoDeMigracao(
+        franqueados=frozenset(franqueados),
+        boleto=_boleto(caminho, migracao["boleto"], contas) if "boleto" in migracao else None,
+    )
+
+
+_CAMPOS_DO_BOLETO = ("banco", "conta", "nosso_numero_inicial", "nosso_numero_final")
+_NOSSO_NUMERO = re.compile(r"\d{1,20}")
+
+
+def _boleto(caminho: Path, boleto: object, contas: tuple[ContaDeExtrato, ...]) -> FaixaDeNossoNumero:
+    secao = "[migracao.boleto]"
+    if not isinstance(boleto, dict):
+        raise ConfiguracaoInvalida(f"{caminho}: {secao} precisa ser uma seção")
+    desconhecidos = sorted(set(boleto) - set(_CAMPOS_DO_BOLETO))
+    if desconhecidos:
+        raise ConfiguracaoInvalida(
+            f"{caminho}: {secao} não conhece {', '.join(desconhecidos)}; use {', '.join(_CAMPOS_DO_BOLETO)}"
+        )
+    if not all(isinstance(boleto.get(campo), str) and boleto[campo] for campo in _CAMPOS_DO_BOLETO):
+        raise ConfiguracaoInvalida(f"{caminho}: {secao} precisa de {', '.join(_CAMPOS_DO_BOLETO)} como texto")
+    faixa = FaixaDeNossoNumero(
+        banco=boleto["banco"],
+        conta=boleto["conta"],
+        inicial=boleto["nosso_numero_inicial"],
+        final=boleto["nosso_numero_final"],
+    )
+    if not any((conta.banco, conta.conta) == (faixa.banco, faixa.conta) for conta in contas):
+        raise ConfiguracaoInvalida(
+            f"{caminho}: {secao} banco '{faixa.banco}' e conta '{faixa.conta}' não estão em nenhuma [[contas]]"
+        )
+    if not (_NOSSO_NUMERO.fullmatch(faixa.inicial) and _NOSSO_NUMERO.fullmatch(faixa.final)):
+        raise ConfiguracaoInvalida(
+            f"{caminho}: {secao} nosso_numero_inicial e nosso_numero_final precisam ter só dígitos, até 20 "
+            "(o tamanho do nosso número no CNAB 240)"
+        )
+    if len(faixa.inicial) != len(faixa.final):
+        raise ConfiguracaoInvalida(
+            f"{caminho}: {secao} nosso_numero_inicial e nosso_numero_final precisam ter o mesmo número de dígitos"
+        )
+    if faixa.inicial > faixa.final:
+        raise ConfiguracaoInvalida(f"{caminho}: {secao} nosso_numero_inicial é maior que nosso_numero_final")
+    return faixa
 
 
 def _limite_de_queda(caminho: Path, resumo: object) -> Decimal:

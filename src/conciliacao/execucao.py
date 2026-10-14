@@ -20,6 +20,7 @@ from conciliacao.dominio import (
     Resultado,
     RetornoDeCobranca,
     TipoDeDecisao,
+    TipoDeIdentificador,
     Titulo,
     UltimaDataDaConta,
     VinculoDeCobranca,
@@ -89,7 +90,9 @@ def executar_conciliacao(
         duplicidades = possiveis_duplicidades_nao_decididas(armazenamento, na_exportacao)
         cobranca = [
             replace(na_cobranca, titulo=originais[chave_do_titulo(na_cobranca.titulo)])
-            for na_cobranca in lista_de_cobranca(titulos, pelo_saldo, duplicidades, data_de_referencia.data)
+            for na_cobranca in lista_de_cobranca(
+                titulos, pelo_saldo, duplicidades, data_de_referencia.data, _boletos_da_plataforma(armazenamento, vinculos)
+            )
         ]
         execucao = armazenamento.registrar_execucao(
             lancamentos_novos=novos,
@@ -147,6 +150,17 @@ def _cobranca_identificada(
         armazenamento.registrar_enriquecimento(retorno, id_por_chave[credito.chave_natural])
     vinculos = {vinculo.chave: vinculo for vinculo in armazenamento.vinculos_de_cobranca()}
     return armazenamento.retornos_dos_creditos(), vinculos
+
+
+def _boletos_da_plataforma(
+    armazenamento: Armazenamento, vinculos: Mapping[ChaveDoIdentificador, VinculoDeCobranca]
+) -> set[tuple[str, str]]:
+    enviados = armazenamento.vinculos_enviados()
+    return {
+        (vinculo.sistema_de_origem, vinculo.documento)
+        for chave, vinculo in vinculos.items()
+        if vinculo.tipo is TipoDeIdentificador.NOSSO_NUMERO and chave in enviados
+    }
 
 
 def _com_titulos_da_exportacao(

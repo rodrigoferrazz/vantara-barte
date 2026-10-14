@@ -8,6 +8,8 @@ _VALOR_PTBR = re.compile(r"\d{1,3}(\.\d{3})*,\d{2}")
 _VALOR_COM_PONTO = re.compile(r"\d+\.\d{2}")
 _DATA_PTBR = re.compile(r"\d{2}/\d{2}/\d{4}")
 _DATA_ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATA_DDMMAAAA = re.compile(r"\d{8}")
+_CAMPO_NUMERICO = re.compile(r"\d+")
 _HORARIO_RFC_3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 _FUSO_DOS_EXTRATOS = ZoneInfo("America/Sao_Paulo")
 _CNPJ_SEM_PONTUACAO = re.compile(r"\d{14}")
@@ -31,6 +33,18 @@ def centavos_de_valor_com_ponto(texto: str) -> int:
     if not _VALOR_COM_PONTO.fullmatch(texto):
         raise FormatoInvalido(f"valor '{texto}' não está no formato 1234.56")
     return int(texto.replace(".", ""))
+
+
+def campo_numerico(texto: str) -> int:
+    if not _CAMPO_NUMERICO.fullmatch(texto):
+        raise FormatoInvalido(f"campo '{texto}' não é numérico")
+    return int(texto)
+
+
+def data_ddmmaaaa(texto: str) -> date:
+    if not _DATA_DDMMAAAA.fullmatch(texto):
+        raise FormatoInvalido(f"data '{texto}' não está no formato ddmmaaaa")
+    return _data(texto, "%d%m%Y")
 
 
 def data_ptbr(texto: str) -> date:
