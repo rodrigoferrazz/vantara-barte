@@ -10,6 +10,7 @@ from decimal import Decimal
 from enum import StrEnum
 from fnmatch import fnmatch
 from fractions import Fraction
+from itertools import count
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -51,6 +52,7 @@ from conciliacao.porta import CobrancaIdentificada, PortaSimulada
 from conciliacao.simulador import Contrafactual, PagamentoSimulado, PlanoDePagamentos
 
 ABA_DO_RESUMO = "Resumo do impacto"
+ABA_DAS_ONDAS = "Ondas"
 ABA_DA_FILA_POR_MOTIVO = "Fila por motivo"
 ABA_DO_RANKING = "Ranking de migração"
 ABA_DE_PREMISSAS = "Premissas"
@@ -81,6 +83,7 @@ class PorQueFicaSolto(StrEnum):
     SEM_TITULO_CONHECIDO = "sem Título conhecido"
     TITULO_SEM_COBRANCA = "Título sem Cobrança identificada"
     NAO_IDENTIFICAVEL_PELO_VALOR = "não identificável pelo valor"
+    FRANQUEADO_NAO_MIGRADO = "Franqueado não migrado"
     FORA_DA_ADESAO = "sorteio acima da Adesão"
 
 
@@ -92,13 +95,22 @@ class CenarioDeAdesao:
 
 
 @dataclass(frozen=True)
+class OndaAcumulada:
+    onda: int
+    franqueados: frozenset[str]
+    cenarios: tuple[CenarioDeAdesao, ...]
+
+
+@dataclass(frozen=True)
 class AnaliseDeImpacto:
     configuracao: Configuracao
     antes: Resultado
     ranking: RankingDeMigracao
     fontes: dict[FonteDaVerdade, int]
     conta_de_cobranca: ContaDeExtrato
+    franqueados: frozenset[str]
     cenarios: tuple[CenarioDeAdesao, ...]
+    ondas: tuple[OndaAcumulada, ...]
 
 
 @dataclass(frozen=True)
@@ -131,15 +143,25 @@ def analisar_impacto(
         finally:
             armazenamento.fechar()
         verdades = _verdades(antes, _do_gabarito(gabarito), _decisoes_da_analista(estado, temporaria), configuracao)
+        ranking = RankingDeMigracao.da_fila(antes.itens, nomes, configuracao.analise_de_impacto.tamanho_da_onda)
         depois = _Depois(pasta, temporaria, configuracao, parecerista, antes, titulos, verdades)
-        cenarios = tuple(depois.cenario(adesao) for adesao in configuracao.analise_de_impacto.faixa_de_adesao)
+        faixa = configuracao.analise_de_impacto.faixa_de_adesao
+        todos = frozenset(titulo.franqueado for titulo in titulos)
+        cenarios = tuple(depois.cenario(adesao, todos) for adesao in faixa)
+        ondas = []
+        migrados: frozenset[str] = frozenset()
+        for numero, da_onda in enumerate(ranking.ondas, start=1):
+            migrados |= {franqueado.raiz for franqueado in da_onda}
+            ondas.append(OndaAcumulada(numero, migrados, tuple(depois.cenario(adesao, migrados) for adesao in faixa)))
     return AnaliseDeImpacto(
         configuracao=configuracao,
         antes=antes,
-        ranking=RankingDeMigracao.da_fila(antes.itens, nomes, configuracao.analise_de_impacto.tamanho_da_onda),
+        ranking=ranking,
         fontes=dict(Counter(verdade.fonte for verdade in verdades)),
         conta_de_cobranca=depois.conta_de_cobranca,
+        franqueados=todos,
         cenarios=cenarios,
+        ondas=tuple(ondas),
     )
 
 
@@ -249,19 +271,58 @@ class _Depois:
             titulos=titulos,
             inicio=min((l.data for l in self.lancamentos), default=date.min),
         )
+        self.franqueado_do_titulo = {chave_do_titulo(titulo): titulo.franqueado for titulo in titulos}
+        self.cenarios = count(1)
+        self.elegiveis, self.sempre_soltos = self._elegibilidade()
 
-    def cenario(self, adesao: Decimal) -> CenarioDeAdesao:
-        nome = f"depois_{adesao}"
+    def _elegibilidade(self) -> tuple[list[_Verdade], list[tuple[_Verdade, PorQueFicaSolto]]]:
+        armazenamento = Armazenamento(self.temporaria / "elegibilidade.sqlite")
+        try:
+            cobrancas = emitir(self.titulos, armazenamento, self.migracao, PortaSimulada(self.configuracao.encargo))
+        finally:
+            armazenamento.fechar()
+        por_titulo = {(c.sistema_de_origem, c.documento): c for c in cobrancas}
+        pagos: set[_ChaveDoTitulo] = set()
+        elegiveis: list[_Verdade] = []
+        soltos: list[tuple[_Verdade, PorQueFicaSolto]] = []
+        for verdade in self.verdades:
+            if verdade.ja_identificado:
+                continue
+            if not verdade.titulos:
+                soltos.append((verdade, PorQueFicaSolto.SEM_TITULO_CONHECIDO))
+                continue
+            if any(titulo not in por_titulo or titulo in pagos for titulo in verdade.titulos):
+                soltos.append((verdade, PorQueFicaSolto.TITULO_SEM_COBRANCA))
+                continue
+            if self._pagamentos(verdade, por_titulo) is None:
+                soltos.append((verdade, PorQueFicaSolto.NAO_IDENTIFICAVEL_PELO_VALOR))
+                continue
+            pagos.update(verdade.titulos)
+            elegiveis.append(verdade)
+        return elegiveis, soltos
+
+    def _pagamentos(
+        self, verdade: _Verdade, por_titulo: Mapping[_ChaveDoTitulo, CobrancaIdentificada]
+    ) -> tuple[PagamentoSimulado, ...] | None:
+        return self.contrafactual.pagamentos(
+            verdade.item.lancamento, [por_titulo[titulo] for titulo in sorted(verdade.titulos)]
+        )
+
+    def cenario(self, adesao: Decimal, migrados: frozenset[str]) -> CenarioDeAdesao:
+        nome = f"depois_{next(self.cenarios):03d}"
         armazenamento = Armazenamento(self.temporaria / f"{nome}.sqlite")
         try:
             porta = PortaSimulada(self.configuracao.encargo)
-            cobrancas = emitir(self.titulos, armazenamento, self.migracao, porta)
-            identificados, soltos = self._planejar(cobrancas, adesao)
+            migracao = replace(self.migracao, franqueados=migrados)
+            cobrancas = emitir((t for t in self.titulos if t.franqueado in migrados), armazenamento, migracao, porta)
+            identificados, soltos = self._planejar(cobrancas, adesao, migrados)
             plano = PlanoDePagamentos(tuple(p for pagamentos in identificados.values() for p in pagamentos))
             for pagamento in plano.pagamentos_de_cobranca:
                 porta.pagar(pagamento)
             pasta = self._pasta_do_depois(self.temporaria / nome, plano, identificados, porta)
-            depois = executar_conciliacao(pasta, armazenamento, self.configuracao_do_depois, self.parecerista)
+            depois = executar_conciliacao(
+                pasta, armazenamento, replace(self.configuracao_do_depois, migracao=migracao), self.parecerista
+            )
         finally:
             armazenamento.fechar()
         return CenarioDeAdesao(
@@ -274,32 +335,20 @@ class _Depois:
         )
 
     def _planejar(
-        self, cobrancas: Iterable[CobrancaIdentificada], adesao: Decimal
+        self, cobrancas: Iterable[CobrancaIdentificada], adesao: Decimal, migrados: frozenset[str]
     ) -> tuple[dict[ChaveNatural, tuple[PagamentoSimulado, ...]], list[tuple[_Verdade, PorQueFicaSolto]]]:
         por_titulo = {(c.sistema_de_origem, c.documento): c for c in cobrancas}
-        pagos: set[_ChaveDoTitulo] = set()
         identificados: dict[ChaveNatural, tuple[PagamentoSimulado, ...]] = {}
-        soltos: list[tuple[_Verdade, PorQueFicaSolto]] = []
-        for verdade in self.verdades:
-            if verdade.ja_identificado:
-                continue
-            if not verdade.titulos:
-                soltos.append((verdade, PorQueFicaSolto.SEM_TITULO_CONHECIDO))
-                continue
-            if any(titulo not in por_titulo or titulo in pagos for titulo in verdade.titulos):
-                soltos.append((verdade, PorQueFicaSolto.TITULO_SEM_COBRANCA))
-                continue
-            pagamentos = self.contrafactual.pagamentos(
-                verdade.item.lancamento, [por_titulo[titulo] for titulo in sorted(verdade.titulos)]
-            )
-            if pagamentos is None:
-                soltos.append((verdade, PorQueFicaSolto.NAO_IDENTIFICAVEL_PELO_VALOR))
-                continue
-            pagos.update(verdade.titulos)
-            if verdade.sorteio * 100 < adesao:
-                identificados[verdade.item.lancamento.chave_natural] = pagamentos
-            else:
+        soltos = list(self.sempre_soltos)
+        for verdade in self.elegiveis:
+            if any(self.franqueado_do_titulo[titulo] not in migrados for titulo in verdade.titulos):
+                soltos.append((verdade, PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO))
+            elif verdade.sorteio * 100 >= adesao:
                 soltos.append((verdade, PorQueFicaSolto.FORA_DA_ADESAO))
+            else:
+                pagamentos = self._pagamentos(verdade, por_titulo)
+                assert pagamentos is not None
+                identificados[verdade.item.lancamento.chave_natural] = pagamentos
         return identificados, soltos
 
     def _pasta_do_depois(
@@ -335,6 +384,7 @@ def gerar_workbook_do_impacto(analise: AnaliseDeImpacto, caminho: Path) -> None:
     assert resumo is not None
     resumo.title = ABA_DO_RESUMO
     _aba_do_resumo(resumo, analise)
+    _aba_das_ondas(workbook.create_sheet(ABA_DAS_ONDAS), analise)
     _aba_da_fila_por_motivo(workbook.create_sheet(ABA_DA_FILA_POR_MOTIVO), analise)
     _aba_do_ranking(workbook.create_sheet(ABA_DO_RANKING), analise.ranking)
     _aba_de_premissas(workbook.create_sheet(ABA_DE_PREMISSAS), analise)
@@ -393,21 +443,80 @@ def _aba_do_resumo(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
         _formatar(aba, valores=(4, 6, 8, 10), percentuais=(11, 12))
     aba.append(())
     aba.append(("Créditos do antes que ficam soltos no depois, por razão",))
-    aba.append(("Adesão (%)", *(f"{razao.value} ({medida})" for razao in PorQueFicaSolto for medida in ("Créditos", "valor"))))
+    razoes = [razao for razao in PorQueFicaSolto if razao is not PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO]
+    aba.append(("Adesão (%)", *(f"{razao.value} ({medida})" for razao in razoes for medida in ("Créditos", "valor"))))
     for cenario in analise.cenarios:
         aba.append(
             (
                 cenario.adesao,
                 *(
                     valor
-                    for razao in PorQueFicaSolto
+                    for razao in razoes
                     for valor in (cenario.soltos[razao].quantidade, _reais(cenario.soltos[razao].valor_centavos))
                 ),
             )
         )
-        _formatar(aba, valores=range(3, 2 * len(PorQueFicaSolto) + 2, 2))
+        _formatar(aba, valores=range(3, 2 * len(razoes) + 2, 2))
     aba.column_dimensions["A"].width = 40
     aba.freeze_panes = "A2"
+
+
+def _aba_das_ondas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
+    aba.append(
+        (
+            "Onda acumulada",
+            "Franqueados migrados",
+            "Adesão (%)",
+            "Créditos identificados",
+            "Créditos de Franqueados não migrados",
+            "Créditos na Fila",
+            "Valor na Fila",
+            "% resolvido sozinho (quantidade)",
+            "% resolvido sozinho (valor)",
+        )
+    )
+    linhas: list[tuple[str | int, int, Decimal | None, Resultado, int | None]] = [
+        ("Antes", 0, None, analise.antes, None),
+        *(
+            (onda.onda, len(onda.franqueados), cenario.adesao, cenario.depois, _nao_migrados(cenario))
+            for onda in analise.ondas
+            for cenario in onda.cenarios
+        ),
+        *(
+            ("Todos os Franqueados", len(analise.franqueados), cenario.adesao, cenario.depois, _nao_migrados(cenario))
+            for cenario in analise.cenarios
+        ),
+    ]
+    for onda, migrados, adesao, resultado, nao_migrados in linhas:
+        fila = resultado.resumo.totais[Destino.FILA_DE_EXCECOES]
+        parte = ParteAutomatica.dos_totais(resultado.resumo.totais)
+        aba.append(
+            (
+                onda,
+                migrados,
+                adesao,
+                ChegadaDosCreditos.do_resultado(resultado).identificados.quantidade,
+                nao_migrados,
+                fila.quantidade,
+                _reais(fila.valor_centavos),
+                _fracao(parte.percentual_da_quantidade),
+                _fracao(parte.percentual_do_valor),
+            )
+        )
+        _formatar(aba, valores=(7,), percentuais=(8, 9))
+    aba.append(())
+    aba.append(
+        (
+            "Cada onda acumulada migra os Franqueados das ondas do Ranking de migração até ela; só os Créditos "
+            "desses Franqueados podem chegar identificados.",
+        )
+    )
+    aba.column_dimensions["A"].width = 22
+    aba.freeze_panes = "A2"
+
+
+def _nao_migrados(cenario: CenarioDeAdesao) -> int:
+    return cenario.soltos[PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO].quantidade
 
 
 def _aba_da_fila_por_motivo(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
@@ -481,7 +590,16 @@ def _aba_de_premissas(aba: Worksheet, analise: AnaliseDeImpacto) -> None:
             "armazenamento é informado; senão a Proposta da Lista ou a sugestão da Fila do antes",
         ),
         *((f"Créditos pela fonte: {fonte.value}", analise.fontes.get(fonte, 0)) for fonte in FonteDaVerdade),
-        ("Franqueados migrados", "todos"),
+        (
+            "Franqueados migrados",
+            "todos, no Resumo do impacto e na Fila por motivo; na aba Ondas, os das ondas acumuladas",
+        ),
+        (
+            "Ondas de migração",
+            "cada onda acumulada migra os Franqueados do Ranking de migração até ela, para cada Adesão, com o mesmo "
+            "sorteio; Crédito de Título de Franqueado não migrado fica solto e só os Títulos dos migrados recebem "
+            "Cobrança identificada",
+        ),
         (
             "Sorteio da Adesão",
             "um número por Crédito, fixo pela semente; o Crédito chega identificado quando o sorteio fica abaixo da "

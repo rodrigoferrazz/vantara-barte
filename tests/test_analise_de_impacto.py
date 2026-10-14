@@ -220,7 +220,7 @@ def test_workbook_com_ranking_em_ondas_e_premissas(pasta: Path, tmp_path: Path) 
 
     gerar_workbook_do_impacto(analisar_impacto(pasta, configuracao, PareceristaFalso()), saida)
 
-    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Fila por motivo", "Ranking de migração", "Premissas"]
+    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Ondas", "Fila por motivo", "Ranking de migração", "Premissas"]
     ranking = _linhas(saida, "Ranking de migração")
     assert ranking[0] == ("Onda", "Posição", "Franqueado", "Raiz do CNPJ", "Créditos na Fila", "Valor")
     assert ranking[1:3] == [
@@ -282,7 +282,10 @@ def test_amostra_de_julho_gera_o_ranking_sobre_a_mesma_conciliacao(tmp_path: Pat
     }
     assert len(dinheiro) == 1
     assert [cenario.adesao for cenario in analise.cenarios] == [50, 80, 95]
-    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Fila por motivo", "Ranking de migração", "Premissas"]
+    [onda] = analise.ondas
+    assert onda.franqueados == {f.raiz for f in analise.ranking.franqueados}
+    assert [c.depois.resumo.totais for c in onda.cenarios] == [c.depois.resumo.totais for c in analise.cenarios]
+    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Ondas", "Fila por motivo", "Ranking de migração", "Premissas"]
 
 
 def _escrever_configuracao(caminho: Path, extra: str = "") -> Path:
@@ -328,7 +331,7 @@ def test_comando_gera_o_workbook_da_analise(pasta: Path, tmp_path: Path, capsys:
 
     assert codigo == 0
     assert str(saida) in capsys.readouterr().out
-    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Fila por motivo", "Ranking de migração", "Premissas"]
+    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Ondas", "Fila por motivo", "Ranking de migração", "Premissas"]
 
 
 def test_comando_falha_sem_pasta_ou_sem_configuracao(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

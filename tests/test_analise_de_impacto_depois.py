@@ -360,7 +360,7 @@ def test_workbook_com_resumo_do_impacto_e_fila_por_motivo_para_cada_adesao(pasta
     analise = analisar_impacto(pasta, _configuracao(50, 100), PareceristaFalso())
     gerar_workbook_do_impacto(analise, saida)
 
-    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Fila por motivo", "Ranking de migração", "Premissas"]
+    assert load_workbook(saida).sheetnames == ["Resumo do impacto", "Ondas", "Fila por motivo", "Ranking de migração", "Premissas"]
     resumo = _linhas(saida, "Resumo do impacto")
     assert resumo[0][:3] == ("Cenário", "Adesão (%)", "Créditos identificados")
     antes, *depois = resumo[1:4]
