@@ -42,7 +42,7 @@ Todos os comandos são rodados na pasta do projeto.
    ollama run qwen3:4b --think=false "diga oi"     # deve responder em menos de um minuto
    ```
 
-Sem o Ollama, a conciliação roda igual e os pagamentos que precisariam da IA ficam marcados "IA indisponível" na fila, para a analista decidir sem o parecer.
+Sem o Ollama, a conciliação roda igual e os pagamentos que precisariam da IA ficam marcados "IA indisponível" na fila, para a analista decidir sem o parecer. Ou seja, não ter a IA rodando não é um limitante.
 
 ## Rodar com o data pack
 

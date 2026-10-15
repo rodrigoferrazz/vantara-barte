@@ -152,7 +152,7 @@ def test_navegacao_no_topo_leva_as_tres_visoes(endereco: str) -> None:
 def test_topo_separa_os_dois_produtos_e_cada_um_mostra_so_as_suas_sub_abas(endereco: str, estado: Path) -> None:
     produtos = {
         "Conciliação Assistida": ["/", "/cobranca", "/gestao"],
-        "Cobrança Endereçada": ["/enderecada/emissao", "/enderecada/migracao", "/enderecada/demonstracao"],
+        "Cobrança Endereçada": ["/enderecada/demonstracao", "/enderecada/emissao", "/enderecada/migracao"],
     }
     for produto, caminhos in produtos.items():
         for caminho in caminhos:
@@ -161,16 +161,16 @@ def test_topo_separa_os_dois_produtos_e_cada_um_mostra_so_as_suas_sub_abas(ender
             links = pagina.por_id("produtos").todos("a")
             assert [(a.texto, a.atributos["href"]) for a in links] == [
                 ("Conciliação Assistida", "/"),
-                ("Cobrança Endereçada", "/enderecada/emissao"),
+                ("Cobrança Endereçada", "/enderecada/demonstracao"),
             ]
             [ativo] = [a for a in links if a.atributos.get("aria-current") == "page"]
             assert ativo.texto == produto
             assert [a.atributos["href"] for a in pagina.por_id("navegacao").todos("a")] == caminhos
     assert [a.texto for a in _abrir(endereco, "/").por_id("navegacao").todos("a")] == ["Analista", "Cobrança", "Gestão"]
     assert [a.texto for a in _abrir(endereco, "/enderecada/emissao").por_id("navegacao").todos("a")] == [
+        "Demonstração",
         "Emissão",
         "Migração",
-        "Demonstração",
     ]
     assert not _abrir(endereco, "/").tem_id("demonstracao")
     assert not estado.exists()
