@@ -138,7 +138,7 @@ A IA (o modelo `qwen3:4b` rodando no Ollama, na própria máquina) só dá parec
 - Na análise de impacto do data pack, não há decisões da analista, então a plataforma usa as próprias sugestões como verdade: se ela errou a fatura no antes, o erro passa para o depois.
 - A emissão das cobranças e os pagamentos são simulados, seguindo as especificações públicas do Pix (Banco Central) e do retorno de boleto CNAB 240 (FEBRABAN); não há banco ou PSP real.
 - Não há integração por API com o Protheus nem com o Omie: os dados entram por arquivos exportados.
-- A baixa no ERP continua manual: a plataforma nunca escreve no Protheus nem no Omie, porque o Protheus só libera leitura. Ela gera a lista do que baixar.
+- A baixa no ERP continua manual: a plataforma nunca escreve no Protheus nem no Omie, por limitação de acesso. Ela gera a lista do que baixar.
 - A tela não tem login: ela só aceita acesso da própria máquina, e quem decide é registrado como o usuário do sistema.
 - A tela atende uma ação por vez: enquanto concilia, fica esperando, e com o Ollama e volume real isso pode levar minutos.
 - A IA errou 1 de 28 pares de nomes fictícios na avaliação (disse "sim" para nomes de empresas diferentes); por isso o "sim" dela nunca baixa sozinho.
@@ -186,4 +186,3 @@ Cobrem as regras de identificação, a leitura de cada formato, as decisões da 
 ## Próximos passos
 
 - **Conta virtual por franqueado**: todo pagamento que entra por ela, inclusive TED e depósito, já diz de qual franqueado é.
-- **Pix Automático para royalty**: o franqueado autoriza uma vez e o royalty é debitado no vencimento, já com identificador.
