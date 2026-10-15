@@ -38,8 +38,8 @@ Todos os comandos são rodados na pasta do projeto.
 3. Confira que o modelo responde:
 
    ```sh
-   ollama list                     # deve listar qwen3:4b
-   ollama run qwen3:4b "diga oi"   # deve responder em alguns segundos
+   ollama list                                     # deve listar qwen3:4b
+   ollama run qwen3:4b --think=false "diga oi"     # deve responder em menos de um minuto
    ```
 
 Sem o Ollama, a conciliação roda igual e os pagamentos que precisariam da IA ficam marcados "IA indisponível" na fila, para a analista decidir sem o parecer.
@@ -60,7 +60,7 @@ O data pack está em `data/`. Só três arquivos entram na conciliação:
    uv run conciliar-tela
    ```
 
-   O navegador abre sozinho em http://127.0.0.1:8765/. Se não abrir, abra esse endereço. A tela fica no ar até você apertar Ctrl+C no terminal.
+   O navegador abre sozinho em http://127.0.0.1:8765/. Se não abrir, abra esse endereço. Se a porta 8765 estiver ocupada, use outra com `uv run conciliar-tela --porta 8766`. A tela fica no ar até você apertar Ctrl+C no terminal.
 
 2. Na aba **Conciliação Assistida > Analista**, clique no seletor de arquivos (**Escolher arquivos**), selecione os três arquivos acima e clique em **Enviar arquivos**. Eles aparecem na lista como novos.
 3. Clique em **Conciliar**. A página recarrega com o resultado em alguns segundos (a primeira chamada à IA carrega o modelo e pode levar até meio minuto).
