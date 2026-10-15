@@ -1,106 +1,189 @@
 # Conciliação de contas a receber - Vantara
 
-Liga cada Crédito do Extrato aos Títulos dos Franqueados exportados do Protheus e do Omie. O que fecha vai para a Lista de baixa; o resto vai para a Fila de exceções com um Motivo de não identificação, para a Analista de conciliação decidir. A plataforma nunca dá baixa no ERP e nunca escreve no Protheus nem no Omie.
+## O que é
 
-A fase 1, a **Conciliação Assistida**, concilia o que chega. A fase 2, a **Cobrança Endereçada**, ataca a causa: cada Título de um Franqueado migrado ganha uma Cobrança identificada (Pix com txid e, quando falta, boleto com nosso número), para o pagamento já chegar dizendo qual Título paga. Sem sistema de pagamento real, a emissão e os Retornos de cobrança passam por uma Porta de cobrança simulada pelas specs públicas (API Pix do Banco Central e retorno CNAB 240 da FEBRABAN).
+Os franqueados da Vantara pagam por Pix, TED, depósito e boleto, e o pagamento entra no banco sem dizer a qual fatura pertence. Alguém precisa descobrir isso à mão, e enquanto não descobre a cobrança liga para franqueado que já pagou.
 
-Glossário em `CONTEXT.md`, decisões de arquitetura em `docs/adr/`, decisões de implementação em `docs/decisoes-implementacao.md` e specs em `.scratch/conciliacao-fase1/spec.md` e `.scratch/conciliacao-fase2/spec.md`.
+- **Conciliação Assistida**: lê o extrato do banco e as faturas em aberto dos ERPs, liga sozinha o que as regras conseguem provar e deixa o resto numa fila para a analista decidir, explicando o motivo de cada caso.
+- **Cobrança Endereçada**: emite cada fatura com um Pix ou boleto próprio, para que o pagamento já chegue dizendo qual fatura paga.
+
+## Pré-requisitos
+
+- **macOS** com [Homebrew](https://brew.sh) (os comandos abaixo são para Mac).
+- **Python 3.13**: se não estiver instalado, o `uv` baixa sozinho no primeiro `uv sync`.
+- **[uv](https://docs.astral.sh/uv/)**, gerenciador de pacotes Python.
+- **[Ollama](https://ollama.com)** com o modelo `qwen3:4b`, que ocupa cerca de 2,5 GB de disco e roda num Mac com 8 GB de memória. É opcional: sem ele tudo roda, só a parte da IA fica desligada.
+
+Nenhuma chave de API ou conta é necessária. Tudo roda local e offline depois da instalação.
 
 ## Instalação
 
-Precisa de Python 3.13 e [uv](https://docs.astral.sh/uv/).
+Todos os comandos são rodados na pasta do projeto.
 
-```sh
-uv sync
-```
+1. Instale o `uv` e as dependências do projeto:
 
-O parecer de nome usa um LLM local pelo Ollama (seção `[ia]` do `conciliacao.toml`, modelo `qwen3:4b`). Sem o Ollama, os itens que precisariam de parecer ficam marcados "IA indisponível" e o resto funciona igual.
+   ```sh
+   brew install uv
+   uv sync
+   ```
 
-## Uso
+2. Instale e inicie o Ollama, e baixe o modelo:
 
-Todos os comandos leem `conciliacao.toml` (opção `--configuracao`), que diz o banco e a conta de cada arquivo de Extrato, o Encargo, a IA e os parâmetros da fase 2.
+   ```sh
+   brew install ollama
+   brew services start ollama
+   ollama pull qwen3:4b
+   ```
 
-| Comando | O que faz |
-| --- | --- |
-| `uv run conciliar <pasta>` | Concilia as exportações e os Extratos da pasta e gera `conciliacao.xlsx`; o estado fica em `conciliacao.sqlite` |
-| `uv run conciliar-tela` | Abre a tela local com a Conciliação Assistida (Analista, cobrança e gestão) e a Cobrança Endereçada (emissão, migração e demonstração) |
-| `uv run emitir-cobrancas` | Emite Cobrança identificada para os Títulos em aberto dos Franqueados migrados (precisa de `[migracao]`) |
-| `uv run analisar-impacto <pasta>` | Gera `analise_de_impacto.xlsx` com o antes e o depois da Cobrança identificada e grava o resultado em `conciliacao.sqlite` para a tela |
+3. Confira que o modelo responde:
 
-Exemplo com a amostra de julho:
+   ```sh
+   ollama list                     # deve listar qwen3:4b
+   ollama run qwen3:4b "diga oi"   # deve responder em alguns segundos
+   ```
+
+Sem o Ollama, a conciliação roda igual e os pagamentos que precisariam da IA ficam marcados "IA indisponível" na fila, para a analista decidir sem o parecer.
+
+## Rodar com o data pack
+
+O data pack está em `data/`. Só três arquivos entram na conciliação:
+
+- `data/01_contas_a_receber_protheus_jul2026.csv`: faturas em aberto do Protheus (ERP da operação principal)
+- `data/02_titulos_unidade_norte_omie_jul2026.csv`: faturas em aberto do Omie (ERP da unidade adquirida)
+- `data/03_extrato_bancario_jul2026.csv`: extrato do Itaú de julho
+
+### Pela tela
+
+1. Suba a tela:
+
+   ```sh
+   uv run conciliar-tela
+   ```
+
+   O navegador abre sozinho em http://127.0.0.1:8765/. Se não abrir, abra esse endereço. A tela fica no ar até você apertar Ctrl+C no terminal.
+
+2. Na aba **Conciliação Assistida > Analista**, clique no seletor de arquivos (**Escolher arquivos**), selecione os três arquivos acima e clique em **Enviar arquivos**. Eles aparecem na lista como novos.
+3. Clique em **Conciliar**. A página recarrega com o resultado em alguns segundos (a primeira chamada à IA carrega o modelo e pode levar até meio minuto).
+
+### Pelo comando
 
 ```sh
 uv run conciliar data
-uv run analisar-impacto data
-uv run conciliar-tela
 ```
 
-### Tela local
+Faz a mesma conciliação sobre a pasta inteira e gera o mesmo Excel. Os arquivos `00_LEIA-ME.md` e `04_caixa_de_entrada_contas_a_pagar.txt` aparecem como recusados, porque não são extrato nem exportação de ERP. Depois, `uv run conciliar-tela` mostra o resultado.
 
-`uv run conciliar-tela` abre a tela sem login. O topo tem uma aba por produto e, dentro de cada uma, uma sub-aba por pessoa; cada produto mostra só o que é dele.
+## O que esperar
 
-**Conciliação Assistida**
+Com o data pack e o Ollama funcionando:
 
-- **Analista**: ela envia os Extratos e as exportações do Protheus e do Omie e clica em Conciliar, que roda a mesma execução do comando `conciliar` (aplica as decisões feitas na tela, grava a execução e gera o Excel). Arquivos não reconhecidos aparecem com o motivo. Depois vêm o resumo (quanto falta confirmar e resolver e a situação da IA), a Lista de baixa com "Confirmar todos", a Fila de exceções em cartões, a lista do que baixar no ERP e o botão para baixar o Excel. Pagamento que chegou pelo Identificador de cobrança aparece destacado na Lista de baixa, com a marca "Pagamento endereçado: o Pix (ou o boleto) já dizia a fatura".
-- **Cobrança**: quem cobrar, com os dias de atraso, e os Títulos que não devem ser cobrados ainda porque há pagamento em análise.
-- **Gestão**: quanto foi resolvido sozinho e a causa raiz em gráfico.
+| | Resultado |
+| --- | --- |
+| Lista de baixa (pagamentos ligados a uma fatura pelas regras, prontos para a analista confirmar) | 6 pagamentos, R$ 156.658,00 |
+| Fila de exceções (casos que a analista decide) | 9 pagamentos, R$ 159.150,50, e 1 fatura que parece estar lançada duas vezes, no Protheus e no Omie |
+| Fora do escopo (saídas de dinheiro: tarifas e um pagamento a fornecedor) | 3 lançamentos, R$ 20.229,00 |
+| Resolvido sozinho | 6 de 15 pagamentos (40,0%), 49,6% do valor |
+| Faturas a cobrar | 1, R$ 8.120,00, com 3 dias de atraso |
+| Faturas que não devem ser cobradas ainda (há um pagamento que pode ser delas em análise) | 9, R$ 220.580,50 |
+| Chamadas à IA | 2 (`TED RECEBIDA DOCE PONTO COM ALIME` e `PIX RECEBIDO SABOR CIA`), as duas com "sim"; ficam na fila como "pagador provável, primeira vez" |
 
-**Cobrança Endereçada**
+Na tela, cada aba mostra:
 
-- **Emissão**, do time de contas a receber: as cobranças emitidas com Franqueado, Título, valor, vencimento, txid, nosso número e a situação (emitida, ou paga quando o Retorno de cobrança já foi ligado a um Crédito numa conciliação).
-- **Migração**, da gestão: com a última análise de impacto gravada, o antes e depois por Adesão, as Ondas de migração, o Ranking e as Premissas.
-- **Demonstração**: os passos da demonstração abaixo, marcados como simulação.
+- **Conciliação Assistida > Analista**: envio dos arquivos, resumo, Lista de baixa com Confirmar e Rejeitar, a fila em cartões com o motivo e a sugestão, e o botão **Baixar o Excel**.
+- **Conciliação Assistida > Cobrança**: quem cobrar, com os dias de atraso, e quem não cobrar ainda, com o motivo.
+- **Conciliação Assistida > Gestão**: quanto foi resolvido sozinho e por que o resto não se identifica, em gráfico.
+- **Cobrança Endereçada > Emissão**: as cobranças emitidas e se já foram pagas.
+- **Cobrança Endereçada > Migração**: quanto da fila sumiria com a Cobrança Endereçada (precisa do `analisar-impacto`, abaixo).
+- **Cobrança Endereçada > Demonstração**: emissão e pagamentos simulados de ponta a ponta.
 
-Os arquivos enviados ficam em `entrada/` (opção `--entrada`) até serem removidos ou substituídos por outro com o mesmo nome; a configuração, o estado e o Excel são os mesmos do comando (`--configuracao`, `--estado`, `--saida`). Tudo funciona sem internet e sem recurso externo.
+Os arquivos gerados ficam na pasta do projeto:
 
-### Demonstração da Cobrança Endereçada na tela
+- `conciliacao.xlsx`: o resultado completo em Excel, uma aba por lista.
+- `conciliacao.sqlite`: o estado entre execuções (pagamentos, decisões e histórico). Apague-o para começar do zero.
+- `entrada/`: os arquivos enviados pela tela.
 
-A sub-aba Demonstração da Cobrança Endereçada é marcada como simulação. Ela não muda nenhuma regra: usa a emissão, a porta simulada e o simulador da fase 2 sobre a última execução.
+As saídas geradas a partir do data pack estão em `exemplos-de-saida/`.
 
-1. **Emitir cobranças** considera todos os Franqueados da última execução como migrados e emite pela porta simulada para todos os Títulos em aberto fora de Possível duplicidade, sem o corte de vencidos da emissão diária, como a análise de impacto: a cobrança é tratada como se tivesse saído antes do vencimento. As cobranças aparecem na sub-aba Emissão.
-2. **Simular pagamentos** faz pagarem em dia pelo identificador (na semana antes do vencimento) as cobranças de Títulos que a última conciliação ainda não ligou a nenhum Crédito, e grava o Extrato e os Retornos (Pix recebidos e CNAB 240) na pasta de entrada. Aparece o botão "Ver na Conciliação Assistida", que leva aos arquivos da Analista.
-3. **Conciliar** (o botão de sempre, na Analista) leva esses pagamentos à Lista de baixa, destacados como pagamentos endereçados, e a Emissão passa a mostrá-los como pagos.
-4. **Zerar demonstração** volta o estado, a pasta de entrada e o Excel ao que eram antes da primeira emissão.
+## Demonstração da Cobrança Endereçada
 
-Sem `[migracao]` no `conciliacao.toml`, a demonstração usa a primeira conta com Extrato para o Pix, o boleto e a faixa de nosso número 0000700001 a 0000799999. Na amostra de julho a emissão cobra os 15 Títulos em aberto, mas 14 já têm Crédito no Extrato real (na Lista de baixa ou na Fila) e não são pagos de novo, então a simulação paga 1.
+Depois de conciliar pela tela:
 
-## Análise de impacto
+1. Em **Cobrança Endereçada > Demonstração**, clique em **Emitir cobranças**. A plataforma emite, por um banco simulado, um Pix com identificador para cada uma das 15 faturas em aberto e um boleto para as que não têm. Elas aparecem em **Emissão** como "Emitida".
+2. Clique em **Simular pagamentos**. A plataforma grava na entrada da analista um extrato e um arquivo de retorno do banco simulados. Só 1 fatura é paga: as outras 14 já têm um pagamento real no extrato de julho, e pagá-las de novo criaria pagamento em dobro. A paga é a única que estava "a cobrar" (NORTE PANIFICADOS, R$ 8.120,00).
+3. Clique em **Ver na Conciliação Assistida** e depois em **Conciliar**. A Lista de baixa passa a ter 7 pagamentos, e o novo aparece em verde com "Pagamento endereçado: o boleto já dizia a fatura". Em **Cobrança**, "A cobrar" cai para 0, e em **Emissão** a fatura aparece como paga.
+4. Clique em **Zerar demonstração** para voltar ao estado de antes da emissão.
 
-Concilia a pasta base como ela é (o "antes"), monta o Ranking de migração com os Créditos da Fila que um Identificador de cobrança resolveria e, para cada Adesão da faixa e cada Onda de migração acumulada, refaz a mesma conciliação com os pagamentos que chegariam identificados (o "depois"). O dinheiro é sempre o mesmo do antes: só muda se cada Crédito chega com identificador. Todas as conciliações rodam em armazenamento temporário e a pasta base não muda; da análise, só o resultado é gravado no `conciliacao.sqlite` (opção `--estado`), ao lado das execuções diárias, sem mexer nelas.
+Na segunda conciliação o resumo mostra o aviso "Decisões não aplicadas": o Excel da primeira conciliação não foi editado, então não há decisão nele para aplicar. É esperado.
 
-Semente, tamanho da onda e faixa de Adesão ficam em `[analise_de_impacto]`. A verdade sobre qual Título cada Crédito paga vem, nesta ordem, do gabarito do gerador sintético (só pelos testes), das decisões confirmadas da Analista no mesmo `conciliacao.sqlite` (as decisões só são lidas) ou das Propostas e sugestões do próprio antes. Na amostra de julho não há decisões confirmadas, então a verdade são as Propostas e sugestões, e a aba Premissas diz isso.
+Para a aba **Migração**, rode em outro terminal:
 
-Cada combinação de onda e Adesão é uma conciliação inteira. Nos dados sintéticos de volume real (cerca de 1.900 Títulos em 4 contas), a configuração padrão (ondas de 10 Franqueados e Adesões de 50%, 80% e 95%) dá 14 ondas e 45 conciliações quando a IA reconhece os nomes do gabarito, e leva cerca de 2,5 minutos num MacBook Air M2 com a IA falsa. Com ondas de 50 Franqueados são 3 ondas e cerca de 40 segundos, que é o que o teste de aceitação roda.
+```sh
+uv run analisar-impacto data
+```
 
-### Na tela
+O comando simula quanto da fila sumiria se parte dos franqueados pagasse pela Cobrança Endereçada. Leva cerca de 30 segundos, gera `analise_de_impacto.xlsx` e grava o resultado para a tela; recarregue a aba Migração. Com o data pack, a fila cai de 9 para 6 pagamentos se metade dos pagamentos vier pela Cobrança Endereçada e para 5 com 80% ou mais. Os 5 que sobram não se resolvem com uma cobrança por fatura: 4 não batem com o valor de uma única fatura (pagamento parcial ou de várias faturas juntas) e 1 não tem fatura correspondente. Como o cálculo funciona: [`docs/analise-de-impacto.md`](docs/analise-de-impacto.md).
 
-A sub-aba Migração da Cobrança Endereçada mostra a última análise gravada, com os mesmos números do workbook da mesma análise. A tela só lê o que o comando gravou; para atualizar, rode `analisar-impacto` de novo e recarregue a página.
+## Onde a IA atua e onde não atua
+
+A IA (o modelo `qwen3:4b` rodando no Ollama, na própria máquina) só dá parecer sobre um ponto: se o nome do pagador no extrato pertence a um franqueado, quando as regras não conseguem identificar pelo nome e o valor bate com faturas desse franqueado. Ela responde sim ou não com uma explicação, que aparece destacada no cartão da fila.
+
+- Tudo que passa pela IA vai para a fila, nunca direto para a Lista de baixa. Quem decide é a analista.
+- Valores, datas, multa, identificação por boleto, Pix e CNPJ são regras determinísticas, sem IA.
+- Se o Ollama estiver fora do ar, demorar mais que o limite ou responder fora do formato, o item fica na fila marcado "IA indisponível", com a sugestão pelo valor, e o resumo avisa. A conciliação nunca para por causa da IA.
+
+## Limitações conhecidas
+
+- Exportação do Protheus com fatura de status diferente de "Aberto", ou do Omie com `paid_flag` diferente de "N", é recusada inteira, com o motivo.
+- Só o extrato do Itaú tem leitor; extratos de outros bancos são recusados com o motivo até haver uma amostra do formato.
+- Na análise de impacto do data pack, não há decisões da analista, então a plataforma usa as próprias sugestões como verdade: se ela errou a fatura no antes, o erro passa para o depois.
+- A emissão das cobranças e os pagamentos são simulados, seguindo as especificações públicas do Pix (Banco Central) e do retorno de boleto CNAB 240 (FEBRABAN); não há banco ou PSP real.
+- Não há integração por API com o Protheus nem com o Omie: os dados entram por arquivos exportados.
+- A baixa no ERP continua manual: a plataforma nunca escreve no Protheus nem no Omie, porque o Protheus só libera leitura. Ela gera a lista do que baixar.
+- A tela não tem login: ela só aceita acesso da própria máquina, e quem decide é registrado como o usuário do sistema.
+- A tela atende uma ação por vez: enquanto concilia, fica esperando, e com o Ollama e volume real isso pode levar minutos.
+- A IA errou 1 de 28 pares de nomes fictícios na avaliação (disse "sim" para nomes de empresas diferentes); por isso o "sim" dela nunca baixa sozinho.
+- Multa de 2% e juros zero por atraso são premissas ainda não confirmadas pelo contrato (ajustáveis na configuração).
+- Só os feriados bancários nacionais contam no vencimento; feriados municipais não.
+- Decisões feitas no Excel só valem se o arquivo for salvo no Excel, que registra quem salvou.
+
+## Configuração
+
+O `conciliacao.toml` é o que muda de um cliente para outro. O código é o mesmo para qualquer cliente: só a configuração e os leitores de arquivo de cada banco e ERP mudam.
+
+- `[[contas]]`: qual banco e conta é cada arquivo de extrato, pelo nome do arquivo.
+- `[encargo]`: multa e juros por atraso.
+- `[ia]`: endereço do Ollama, modelo e tempo limite. Sem essa seção, a IA fica desligada.
+- `[migracao]`: franqueados que já recebem a Cobrança Endereçada (comentado; sem ele a emissão diária não emite).
+- `[analise_de_impacto]`, `[somas]` e `[resumo]`: parâmetros da análise de impacto, da busca de combinações de faturas e do alerta de queda.
+
+Cada comando aceita `--configuracao` para usar outro arquivo.
 
 ## Testes
 
 ```sh
-uv run pytest                 # suíte sem serviços externos
+uv run pytest                 # suíte completa, sem Ollama (usa uma IA falsa)
 uv run pytest -m integracao   # com o Ollama real (pula se ele não estiver rodando)
-uv run mypy                   # tipagem estrita de src e tests
+uv run mypy                   # checagem de tipos
 ```
 
-Os testes de aceitação estão em `tests/test_aceitacao_amostra_julho.py` (fase 1) e `tests/test_aceitacao_analise_de_impacto.py` (fase 2, julho e o sintético de 1.900 Títulos). Os números esperados da amostra vivem só nos testes, nunca no código de produção.
+Cobrem as regras de identificação, a leitura de cada formato, as decisões da analista, a tela, a emissão e a análise de impacto, incluindo a aceitação ponta a ponta com o data pack e com dados sintéticos de volume real (cerca de 1.900 faturas). A suíte leva cerca de 1,5 minuto.
 
-## Fora do escopo da fase 2
+## Onde está o resto
 
-- Integração com banco ou PSP real: o adaptador real da Porta de cobrança entra no lugar do simulado quando existir o sistema.
-- Remessa CNAB, CNAB 400 e variações de banco; BR Code, QR e boleto em PDF; envio da cobrança ao Franqueado.
-- Cancelamento ou reemissão de cobrança quando o Título muda de valor ou é baixado.
-- Opção de linha de comando para demonstrar o simulador por proporções e as proporções no `conciliacao.toml`: a demonstração ficou na tela (acima), sempre com todos pagando em dia.
+- `CONTEXT.md`: glossário dos termos do domínio.
+- `docs/adr/`: decisões de arquitetura.
+- `docs/decisoes-implementacao.md`: cada decisão de implementação, com o porquê e as alternativas.
+- `docs/analise-de-impacto.md`: como a análise de impacto calcula.
+- `.scratch/conciliacao-fase1/spec.md` e `.scratch/conciliacao-fase2/spec.md`: specs da Conciliação Assistida e da Cobrança Endereçada.
+
+## Fora do escopo
+
+- Contas a pagar (`data/04_caixa_de_entrada_contas_a_pagar.txt`) e qualquer saída de dinheiro do extrato.
+- Banco ou PSP real, envio da cobrança ao franqueado, QR Code e boleto em PDF.
+- Cancelamento ou reemissão de cobrança quando a fatura muda.
+- Várias analistas, aprovação em dois níveis e instalação no servidor do cliente.
 
 ## Próximos passos
 
-Nenhum destes está implementado; ficam registrados como o caminho depois da fase 2.
-
-### Conta virtual por Franqueado
-
-Cada Franqueado recebe uma conta virtual (subconta ou número de conta próprio no mesmo banco) para depositar e transferir. Qualquer pagamento que entra por ela, inclusive TED, depósito e Pix por chave, já diz de qual Franqueado é, sem depender do nome no histórico. Ataca o que a Cobrança identificada não resolve: o Crédito solto que chega por TED ou depósito sem nome, hoje "sem identificação do pagador". O Título continua decidido pelas regras da fase 1 (valor, Valor único e soma), agora com o Franqueado certo. Depende de o banco oferecer contas virtuais e de o Extrato trazer a conta virtual de cada Crédito.
-
-### Pix Automático para royalty
-
-O royalty é recorrente, então pode ser cobrado pelo Pix Automático: o Franqueado autoriza uma vez e cada cobrança é debitada no vencimento, com txid, sem ele precisar pagar. A API Pix que a fase 2 já segue cobre isso em `/rec` (recorrência autorizada) e `/cobr` (cobrança de cada ciclo), então o Retorno chega como um Pix recebido com txid, pelo mesmo adaptador. Reduz atraso, pagamento parcial e Crédito solto no Título que mais se repete. Depende do PSP real e da autorização de cada Franqueado, e as regras de agendamento e de nova tentativa do Pix Automático precisam de spec própria.
+- **Conta virtual por franqueado**: todo pagamento que entra por ela, inclusive TED e depósito, já diz de qual franqueado é.
+- **Pix Automático para royalty**: o franqueado autoriza uma vez e o royalty é debitado no vencimento, já com identificador.
