@@ -1,413 +1,383 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from decimal import Decimal
-from fractions import Fraction
+from dataclasses import dataclass
+from enum import StrEnum
 from html import escape
 
-from conciliacao.calendario import vencimento_efetivo
-from conciliacao.decisoes import DECISOES_DE_CREDITO_DA_FILA, DECISOES_DE_DUPLICIDADE
-from conciliacao.dominio import (
-    CausaRaiz,
-    DecisaoDaTela,
-    GrupoDaCausaRaiz,
-    Item,
-    ItemDeTitulo,
-    Lancamento,
-    MotivoDeNaoIdentificacao,
-    NumerosDoCenario,
-    PorQueFicaSolto,
-    RankingDeMigracao,
-    RelatorioDeImpacto,
-    Resultado,
-    TipoDeDecisao,
-    TituloNaCobranca,
-    TotalDoDestino,
-    ValorDaPremissa,
-)
-from conciliacao.impacto import EXPLICACAO_DAS_ONDAS, EXPLICACAO_DO_SEM_FRANQUEADO, RAZOES_DO_RESUMO
-from conciliacao.normalizacao import formatar_adesao, formatar_percentual, formatar_reais
-from conciliacao.saidas import (
-    ABA_DA_FILA_DE_EXCECOES,
-    ABA_DA_LISTA_DE_BAIXA,
-    descrever_titulos,
-    linhas_do_resumo,
-    total_da_cobranca,
-)
+from conciliacao.dominio import GrupoDaCausaRaiz
+
+
+class Estado(StrEnum):
+    OK = "ok"
+    PENDENTE = "pendente"
+    PROBLEMA = "problema"
+    NEUTRO = "neutro"
+
+
+class Produto(StrEnum):
+    CONCILIACAO_ASSISTIDA = "Conciliação Assistida"
+    COBRANCA_ENDERECADA = "Cobrança Endereçada"
+
+
+class Visao(StrEnum):
+    ANALISTA = "/"
+    COBRANCA = "/cobranca"
+    GESTAO = "/gestao"
+    EMISSAO = "/enderecada/emissao"
+    MIGRACAO = "/enderecada/migracao"
+    DEMONSTRACAO = "/enderecada/demonstracao"
+
+
+_VISOES_DOS_PRODUTOS = {
+    Produto.CONCILIACAO_ASSISTIDA: {
+        Visao.ANALISTA: "Analista",
+        Visao.COBRANCA: "Cobrança",
+        Visao.GESTAO: "Gestão",
+    },
+    Produto.COBRANCA_ENDERECADA: {
+        Visao.EMISSAO: "Emissão",
+        Visao.MIGRACAO: "Migração",
+        Visao.DEMONSTRACAO: "Demonstração",
+    },
+}
 
 _ESTILO = """
-:root { --fundo: #ffffff; --texto: #1d1d1f; --suave: #6b6b70; --borda: #d9d9de; --cabecalho: #f3f3f6;
-  --barra: #2f6db5; --parecer: #fff6d6; --parecer-borda: #c99a06; --alerta: #b3261e; }
+:root { color-scheme: light;
+  --plano: #f5f5f2; --superficie: #ffffff; --superficie-2: #fafaf8;
+  --tinta: #111110; --tinta-2: #52514e; --tinta-3: #77766f;
+  --borda: #e4e3dc; --borda-forte: #cfcec6;
+  --acento: #2a78d6; --acento-tinta: #1c5cab; --acento-fundo: #eaf2fc;
+  --ok: #17701a; --ok-fundo: #e8f4e6; --ok-borda: #b7dbb3;
+  --pendente: #8a5a00; --pendente-fundo: #fff5dc; --pendente-borda: #efd38c;
+  --problema: #b42323; --problema-fundo: #fdeded; --problema-borda: #f0bdbd;
+  --ia: #4f3fc0; --ia-fundo: #f1effd; --ia-borda: #cfc8f5;
+  --barra: #2a78d6; --grade: #e1e0d9;
+  --sombra: 0 1px 2px rgba(17, 17, 16, .05); }
 @media (prefers-color-scheme: dark) {
-  :root { --fundo: #18181b; --texto: #ececf1; --suave: #a1a1aa; --borda: #3f3f46; --cabecalho: #27272a;
-    --barra: #6aa3e8; --parecer: #3a3115; --parecer-borda: #e0b528; --alerta: #f2b8b5; }
+  :root:not([data-theme="light"]) { color-scheme: dark;
+    --plano: #0f0f0e; --superficie: #1a1a19; --superficie-2: #212120;
+    --tinta: #f0efec; --tinta-2: #c3c2b7; --tinta-3: #9a998f;
+    --borda: #2e2e2c; --borda-forte: #44443f;
+    --acento: #5598e7; --acento-tinta: #86b6ef; --acento-fundo: #18273a;
+    --ok: #6fcf6f; --ok-fundo: #15291a; --ok-borda: #2c5530;
+    --pendente: #f2c45a; --pendente-fundo: #2e2410; --pendente-borda: #5b4718;
+    --problema: #f19a9a; --problema-fundo: #341616; --problema-borda: #6a2c2c;
+    --ia: #b3a9f2; --ia-fundo: #221f3a; --ia-borda: #433b78;
+    --barra: #3987e5; --grade: #2c2c2a; --sombra: none; }
 }
-body { margin: 0; padding: 16px; background: var(--fundo); color: var(--texto);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1200px; margin: 0 auto; }
-h1 { font-size: 22px; margin: 0 0 16px; }
-h2 { font-size: 18px; margin: 32px 0 8px; }
-h3 { font-size: 15px; margin: 20px 0 8px; }
-p.total, p.vazia { color: var(--suave); margin: 4px 0 8px; }
-.rolagem { overflow-x: auto; }
+:root[data-theme="dark"] { color-scheme: dark;
+  --plano: #0f0f0e; --superficie: #1a1a19; --superficie-2: #212120;
+  --tinta: #f0efec; --tinta-2: #c3c2b7; --tinta-3: #9a998f;
+  --borda: #2e2e2c; --borda-forte: #44443f;
+  --acento: #5598e7; --acento-tinta: #86b6ef; --acento-fundo: #18273a;
+  --ok: #6fcf6f; --ok-fundo: #15291a; --ok-borda: #2c5530;
+  --pendente: #f2c45a; --pendente-fundo: #2e2410; --pendente-borda: #5b4718;
+  --problema: #f19a9a; --problema-fundo: #341616; --problema-borda: #6a2c2c;
+  --ia: #b3a9f2; --ia-fundo: #221f3a; --ia-borda: #433b78;
+  --barra: #3987e5; --grade: #2c2c2a; --sombra: none; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--plano); color: var(--tinta);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+header.topo { background: var(--superficie); border-bottom: 1px solid var(--borda); }
+.topo-dentro { max-width: 1120px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; gap: 32px; }
+.marca { font-weight: 700; letter-spacing: -.01em; padding: 14px 0; white-space: nowrap; }
+.marca span { color: var(--tinta-3); font-weight: 500; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav a { color: var(--tinta-2); text-decoration: none; padding: 15px 12px 13px; border-bottom: 2px solid transparent;
+  font-weight: 500; }
+nav a:hover { color: var(--tinta); }
+nav a[aria-current="page"] { color: var(--tinta); border-bottom-color: var(--acento); }
+.personas { background: var(--superficie-2); border-bottom: 1px solid var(--borda); }
+.personas nav a { padding: 9px 12px 7px; font-size: 13px; }
+main { max-width: 1120px; margin: 0 auto; padding: 28px 24px 64px; }
+h1 { font-size: 24px; line-height: 1.25; letter-spacing: -.015em; margin: 0; }
+.subtitulo { color: var(--tinta-2); margin: 4px 0 0; }
+h2 { font-size: 17px; letter-spacing: -.01em; margin: 0; }
+h3 { font-size: 14px; margin: 20px 0 8px; color: var(--tinta-2); font-weight: 600; }
+section { margin-top: 32px; }
+.cabecalho-da-secao { display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap; margin-bottom: 12px; }
+.cabecalho-da-secao .acoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.nota { color: var(--tinta-2); margin: 4px 0 12px; }
+.cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; box-shadow: var(--sombra); }
+.cartao.com-folga { padding: 16px 20px; }
+.numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.numero { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 16px 18px;
+  box-shadow: var(--sombra); border-top: 3px solid var(--borda-forte); }
+.numero.ok { border-top-color: var(--ok); }
+.numero.pendente { border-top-color: var(--pendente-borda); }
+.numero.problema { border-top-color: var(--problema); }
+.numero .rotulo { color: var(--tinta-2); font-size: 13px; font-weight: 500; }
+.numero .valor { font-size: 32px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; margin-top: 4px; }
+.numero .valor small { font-size: 14px; font-weight: 500; letter-spacing: 0; color: var(--tinta-2); }
+.numero .detalhe { color: var(--tinta-2); font-size: 13px; margin-top: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+  font-weight: 600; border: 1px solid var(--borda); background: var(--superficie-2); color: var(--tinta-2);
+  white-space: nowrap; }
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.ok { color: var(--ok); background: var(--ok-fundo); border-color: var(--ok-borda); }
+.chip.pendente { color: var(--pendente); background: var(--pendente-fundo); border-color: var(--pendente-borda); }
+.chip.problema { color: var(--problema); background: var(--problema-fundo); border-color: var(--problema-borda); }
+.aviso { border-radius: 10px; padding: 12px 16px; border: 1px solid var(--borda); background: var(--superficie);
+  margin-top: 12px; }
+.aviso.problema { background: var(--problema-fundo); border-color: var(--problema-borda); color: var(--problema); }
+.aviso.pendente { background: var(--pendente-fundo); border-color: var(--pendente-borda); color: var(--pendente); }
+.aviso.ok { background: var(--ok-fundo); border-color: var(--ok-borda); color: var(--ok); }
+.aviso strong { display: block; margin-bottom: 2px; }
+.aviso ul { margin: 6px 0 0; padding-left: 18px; }
+.vazia { color: var(--tinta-2); background: var(--superficie); border: 1px dashed var(--borda-forte);
+  border-radius: 10px; padding: 18px 20px; margin: 0; }
+details > summary { cursor: pointer; color: var(--acento-tinta); font-weight: 500; list-style: none;
+  display: inline-flex; align-items: center; gap: 6px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "▸"; font-size: 11px; transition: transform .15s; }
+details[open] > summary::before { transform: rotate(90deg); }
+details.bloco { margin-top: 16px; }
+details.bloco > .dentro { margin-top: 12px; }
+.tabela { width: 100%; overflow: hidden; }
 table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid var(--borda); padding: 4px 8px; text-align: left; vertical-align: top; }
-thead th, #resumo th { background: var(--cabecalho); }
-#resumo th { width: 32%; font-weight: 600; }
-.parecer { margin-top: 6px; padding: 4px 8px; background: var(--parecer); border-left: 4px solid var(--parecer-borda); }
-.ia-indisponivel { font-weight: 700; color: var(--alerta); }
-#conflitos { border-left: 4px solid var(--alerta); padding: 4px 12px; }
-#conflitos h2 { color: var(--alerta); margin-top: 8px; }
-#recusa { color: var(--alerta); font-weight: 600; }
-form.decisao { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 2px 0; }
-form.decisao label { display: flex; flex-direction: column; font-size: 12px; color: var(--suave); }
-input, select, button { font: inherit; }
-svg { max-width: 100%; height: auto; }
-svg text { fill: var(--texto); font-size: 12px; }
-svg rect { fill: var(--barra); }
-nav { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 12px; }
-a { color: var(--barra); }
+th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--borda);
+  overflow-wrap: anywhere; }
+thead th { font-size: 12px; font-weight: 600; color: var(--tinta-2); background: var(--superficie-2);
+  overflow-wrap: normal; }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.compacta th, table.compacta td { padding: 6px 10px; font-size: 13px; }
+.forte { font-weight: 600; }
+.suave { color: var(--tinta-2); }
+button, .botao { font: inherit; font-weight: 600; font-size: 13px; border-radius: 8px; padding: 7px 14px;
+  border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--tinta); cursor: pointer;
+  text-decoration: none; display: inline-flex; align-items: center; gap: 6px; line-height: 1.3;
+  white-space: nowrap; }
+button:hover, .botao:hover { background: var(--superficie-2); border-color: var(--tinta-3); }
+button.primario, .botao.primario { background: var(--acento); border-color: var(--acento); color: #fff; }
+button.primario:hover, .botao.primario:hover { background: var(--acento-tinta); border-color: var(--acento-tinta); }
+button.confirmar { color: var(--ok); border-color: var(--ok-borda); background: var(--ok-fundo); }
+button.discreto { border-color: transparent; background: transparent; color: var(--tinta-2); padding: 7px 8px; }
+button.discreto:hover { color: var(--problema); background: var(--problema-fundo); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+input[type="text"], input:not([type]) { font: inherit; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--tinta); min-width: 0; }
+input:focus-visible, button:focus-visible, summary:focus-visible, a:focus-visible {
+  outline: 2px solid var(--acento); outline-offset: 2px; }
+form { margin: 0; }
+form.em-linha { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.botoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.identificador { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+form.em-linha label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--tinta-2); }
+a { color: var(--acento-tinta); }
+.grafico { overflow: hidden; }
+svg { max-width: 100%; height: auto; display: block; }
+svg text { fill: var(--tinta); font-size: 12px; font-family: inherit; }
+svg text.valor { fill: var(--tinta-2); font-variant-numeric: tabular-nums; }
+svg .marca-da-barra { fill: var(--barra); }
+svg line.base { stroke: var(--borda-forte); stroke-width: 1; }
+svg g.barra:hover .marca-da-barra { opacity: .8; }
+.duas-colunas { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+#recusa { color: var(--problema); font-weight: 600; }
+.espaco { margin-top: 14px; }
+h3.sem-margem { margin-top: 0; }
+details.linha { margin-top: 6px; font-size: 13px; }
+details.linha > .dentro { margin-top: 8px; }
+dl.explicacao { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; margin: 0; padding: 12px 14px;
+  background: var(--superficie-2); border: 1px solid var(--borda); border-radius: 8px; font-size: 13px; }
+dl.explicacao dt { color: var(--tinta-2); font-weight: 600; }
+dl.explicacao dd { margin: 0; overflow-wrap: anywhere; }
+.decisao-registrada { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; font-size: 13px; }
+.cartoes { display: flex; flex-direction: column; gap: 12px; }
+.item-da-fila { padding: 16px 20px; border-left: 4px solid var(--pendente-borda); }
+.item-da-fila.decidido { border-left-color: var(--ok); }
+.cabeca-do-item { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.pagador { font-weight: 650; font-size: 15px; overflow-wrap: anywhere; }
+.valor-do-item { font-size: 20px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.motivo { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-top: 10px; }
+.sugerido { margin-top: 8px; }
+.parecer { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--ia-fundo);
+  border: 1px solid var(--ia-borda); }
+.parecer ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.parecer.indisponivel { background: var(--problema-fundo); border-color: var(--problema-borda); }
+.acoes-da-linha { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rotulo-da-ia { color: var(--ia); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.ia-indisponivel { color: var(--problema); font-weight: 700; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; }
+.decisoes { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--borda); }
+.mais-decisoes { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+.item-da-fila .decisao-registrada { margin-bottom: 4px; }
+.encargos { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; margin-top: 4px; }
+.etiqueta { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 6px; white-space: nowrap;
+  color: var(--pendente); background: var(--pendente-fundo); border: 1px solid var(--pendente-borda); }
+.alerta-de-duplicidade { margin-top: 6px; padding: 6px 10px; border-radius: 8px; font-size: 13px;
+  color: var(--problema); background: var(--problema-fundo); border: 1px solid var(--problema-borda); }
+.alerta-de-duplicidade a { color: inherit; font-weight: 600; }
+tr.destacada td { background: var(--ok-fundo); }
+tr.destacada td:first-child { box-shadow: inset 4px 0 0 var(--ok); }
+.sem-quebra { white-space: nowrap; }
+.enderecado { display: inline-block; margin-bottom: 4px; padding: 2px 10px;
+  border-radius: 8px; font-size: 12px; font-weight: 700; color: var(--ok); background: var(--superficie);
+  border: 1px solid var(--ok-borda); }
+.simulacao { border: 2px dashed var(--pendente); background: var(--pendente-fundo); color: var(--pendente);
+  border-radius: 10px; padding: 12px 16px; margin-top: 16px; }
+.simulacao strong { text-transform: uppercase; letter-spacing: .06em; margin-right: 6px; }
+.passos { display: flex; flex-direction: column; gap: 12px; }
+.passo { padding: 16px 20px; display: grid; grid-template-columns: 36px 1fr; gap: 4px 14px; align-items: start; }
+.passo .ordem { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700;
+  background: var(--acento-fundo); color: var(--acento-tinta); }
+.passo.feito .ordem { background: var(--ok-fundo); color: var(--ok); }
+.passo h2 { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.passo .explicacao-do-passo { color: var(--tinta-2); margin: 4px 0 10px; }
+.passo > div { grid-column: 2; }
+.situacao-da-ia { margin: 10px 0 0; font-size: 13px; color: var(--tinta-2); display: flex; gap: 8px;
+  align-items: center; }
 """
 
 
-def renderizar(resultado: Resultado | None, decididos_na_tela: Mapping[str, DecisaoDaTela] | None = None) -> str:
-    if resultado is None:
-        corpo = (
-            '<p id="sem-execucao">Não há execução registrada no armazenamento. '
-            "Rode a conciliação sobre uma pasta de arquivos para gerar a primeira.</p>"
-        )
-        titulo = "Conciliação"
-    else:
-        corpo = _corpo(resultado, decididos_na_tela or {})
-        titulo = f"Conciliação - execução {resultado.resumo.execucao}"
-    return _documento(titulo, corpo)
-
-
-def renderizar_recusa(mensagem: str) -> str:
-    return _documento(
-        "Decisão não registrada",
-        f'<p id="recusa">{escape(mensagem)}</p><p><a href="/">Voltar à tela</a></p>',
+def documento(titulo: str, corpo: str, visao: Visao | None = None) -> str:
+    produto = next((p for p, visoes in _VISOES_DOS_PRODUTOS.items() if visao in visoes), None)
+    personas = (
+        f'<div class="personas"><div class="topo-dentro">{_navegacao(_VISOES_DOS_PRODUTOS[produto], visao)}</div></div>'
+        if produto is not None
+        else ""
     )
-
-
-def _documento(titulo: str, corpo: str) -> str:
     return (
         '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(titulo)}</title><style>{_ESTILO}</style></head>"
-        f"<body><main>{_NAVEGACAO}<h1>{escape(titulo)}</h1>{corpo}</main></body></html>"
+        f'<body><header class="topo"><div class="topo-dentro"><div class="marca">Vantara <span>Contas a receber'
+        f"</span></div>{_produtos(produto)}</div>{personas}</header><main>{corpo}</main></body></html>"
     )
 
 
-_NAVEGACAO = '<nav id="navegacao"><a href="/">Execução diária</a><a href="/impacto">Análise de impacto</a></nav>'
-
-
-def _corpo(resultado: Resultado, decididos_na_tela: Mapping[str, DecisaoDaTela]) -> str:
-    return "".join(
-        (
-            _secao("Resumo da execução", "secao-resumo", _tabela_do_resumo(resultado)),
-            _conflitos(resultado.resumo.decisoes.conflitos),
-            _secao("Lista de baixa", "lista-de-baixa", _itens(resultado.lista_de_baixa)),
-            _secao(
-                "Decidir a Lista de baixa",
-                "decidir-lista-de-baixa",
-                _decidir_a_lista(resultado.lista_de_baixa, decididos_na_tela),
-            ),
-            _secao("Fila de exceções", "fila-de-excecoes", _itens(resultado.fila_de_excecoes, resultado.itens_de_titulo)),
-            _secao(
-                "Resolver a Fila de exceções",
-                "resolver-fila",
-                _resolver_a_fila(resultado.fila_de_excecoes, resultado.itens_de_titulo, decididos_na_tela),
-            ),
-            _secao(
-                "Lista de cobrança",
-                "lista-de-cobranca",
-                _total(total_da_cobranca(resultado.lista_de_cobranca)) + _cobranca(resultado.lista_de_cobranca),
-            ),
-            _secao(
-                "Títulos em análise",
-                "em-analise",
-                _total(
-                    f"{total_da_cobranca(resultado.em_analise)}. Há Crédito candidato na Fila de exceções: "
-                    "não cobrar ainda."
-                )
-                + _cobranca(resultado.em_analise, resultado),
-            ),
-            _secao("Causa raiz", "causa-raiz", _causa_raiz(resultado.causa_raiz)),
-            _secao("Fora do escopo", "fora-do-escopo", _fora_do_escopo(resultado.fora_do_escopo)),
-        )
+def _produtos(ativo: Produto | None) -> str:
+    links = "".join(
+        f'<a href="{next(iter(visoes)).value}"{' aria-current="page"' if produto is ativo else ""}>{escape(produto)}</a>'
+        for produto, visoes in _VISOES_DOS_PRODUTOS.items()
     )
+    return f'<nav id="produtos">{links}</nav>'
 
 
-_AVISO_DAS_DECISOES = (
-    "As decisões da tela valem na próxima execução, junto com as do Excel. Item decidido no Excel e na tela "
-    "desde a última execução vira conflito e nenhuma das duas decisões é aplicada."
-)
-
-
-def _conflitos(conflitos: Sequence[str]) -> str:
-    if not conflitos:
-        return ""
-    itens = "".join(f"<li>{escape(conflito)}</li>" for conflito in conflitos)
-    return _secao(
-        "Conflitos entre Excel e tela",
-        "conflitos",
-        _total("Nenhuma das decisões destes itens foi aplicada; decida de novo por uma só origem.") + f"<ul>{itens}</ul>",
+def _navegacao(visoes: Mapping[Visao, str], ativa: Visao | None) -> str:
+    links = "".join(
+        f'<a href="{visao.value}"{' aria-current="page"' if visao is ativa else ""}>{escape(nome)}</a>'
+        for visao, nome in visoes.items()
     )
+    return f'<nav id="navegacao">{links}</nav>'
 
 
-def _decidir_a_lista(itens: Sequence[Item], decididos_na_tela: Mapping[str, DecisaoDaTela]) -> str:
-    if not itens:
-        return '<p class="vazia">Lista vazia.</p>'
-    lote = (
-        '<form method="post" action="/confirmar-lote" class="decisao">'
-        "<button>Confirmar o lote</button> <span>confirma os itens ainda sem decisão na tela</span></form>"
-    )
-    linhas = [
-        (
-            "",
-            (
-                escape(item.identificador),
-                _decidido_na_tela(decididos_na_tela.get(item.identificador)),
-                _formulario(ABA_DA_LISTA_DE_BAIXA, item.identificador, _campo_oculto("decisao", "confirmar"), "Confirmar")
-                + _formulario(
-                    ABA_DA_LISTA_DE_BAIXA,
-                    item.identificador,
-                    _campo_oculto("decisao", TipoDeDecisao.REJEITAR.value)
-                    + '<label>Motivo da rejeição<input name="motivo" required></label>',
-                    "Rejeitar",
-                ),
-            ),
-        )
-        for item in itens
-    ]
-    return _total(_AVISO_DAS_DECISOES) + lote + _tabela(("Item", "Decisão na tela", "Decidir"), linhas)
+def cabecalho_da_pagina(titulo: str, subtitulo: str = "") -> str:
+    complemento = f'<p class="subtitulo">{escape(subtitulo)}</p>' if subtitulo else ""
+    return f"<div><h1>{escape(titulo)}</h1>{complemento}</div>"
 
 
-def _resolver_a_fila(
-    itens: Sequence[Item], itens_de_titulo: Sequence[ItemDeTitulo], decididos_na_tela: Mapping[str, DecisaoDaTela]
-) -> str:
-    de_credito = (
-        _escolha(DECISOES_DE_CREDITO_DA_FILA)
-        + '<label>Título(s) escolhido(s)<input name="titulos"></label>'
-        + '<label>CNPJ do Franqueado (Conciliado fora)<input name="franqueado"></label>'
-        + '<label>Referência (Conciliado fora)<input name="referencia"></label>'
-    )
-    de_titulo = _escolha(DECISOES_DE_DUPLICIDADE) + '<label>Título oficial (mesma dívida)<input name="titulos"></label>'
-    linhas = [
-        (
-            "",
-            (
-                escape(identificador),
-                _decidido_na_tela(decididos_na_tela.get(identificador)),
-                _formulario(ABA_DA_FILA_DE_EXCECOES, identificador, campos, "Resolver"),
-            ),
-        )
-        for identificador, campos in (
-            *((item.identificador, de_credito) for item in itens),
-            *((item.identificador, de_titulo) for item in itens_de_titulo),
-        )
-    ]
-    if not linhas:
-        return '<p class="vazia">Lista vazia.</p>'
-    return _total(_AVISO_DAS_DECISOES) + _tabela(("Item", "Decisão na tela", "Resolver"), linhas)
-
-
-def _formulario(aba: str, item: str, campos: str, botao: str) -> str:
+def secao(titulo: str, identificador: str, conteudo: str, acoes: str = "", nota: str = "") -> str:
+    lado = f'<div class="acoes">{acoes}</div>' if acoes else ""
+    texto = f'<p class="nota">{escape(nota)}</p>' if nota else ""
     return (
-        '<form method="post" action="/decidir" class="decisao">'
-        f'{_campo_oculto("aba", aba)}{_campo_oculto("item", item)}{campos}<button>{escape(botao)}</button></form>'
+        f'<section id="{identificador}"><div class="cabecalho-da-secao"><h2>{escape(titulo)}</h2>{lado}</div>'
+        f"{texto}{conteudo}</section>"
     )
 
 
-def _campo_oculto(nome: str, valor: str) -> str:
+@dataclass(frozen=True)
+class Numero:
+    rotulo: str
+    valor: str
+    detalhe: str = ""
+    estado: Estado = Estado.NEUTRO
+    identificador: str = ""
+    complemento: str = ""
+
+
+def numeros(*itens: Numero) -> str:
+    return '<div class="numeros">' + "".join(_numero(item) for item in itens) + "</div>"
+
+
+def _numero(numero: Numero) -> str:
+    atributo = f' id="{numero.identificador}"' if numero.identificador else ""
+    detalhe = f'<div class="detalhe">{escape(numero.detalhe)}</div>' if numero.detalhe else ""
+    complemento = f" <small>{escape(numero.complemento)}</small>" if numero.complemento else ""
+    return (
+        f'<div class="numero {numero.estado.value}"{atributo}><div class="rotulo">{escape(numero.rotulo)}</div>'
+        f'<div class="valor">{escape(numero.valor)}{complemento}</div>{detalhe}</div>'
+    )
+
+
+def chip(texto: str, estado: Estado) -> str:
+    return f'<span class="chip {estado.value}">{escape(texto)}</span>'
+
+
+def aviso(titulo: str, texto: str, estado: Estado, identificador: str = "", itens: Sequence[str] = ()) -> str:
+    atributo = f' id="{identificador}"' if identificador else ""
+    lista = "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in itens) + "</ul>" if itens else ""
+    corpo = f"<span>{escape(texto)}</span>" if texto else ""
+    return f'<div class="aviso {estado.value}"{atributo}><strong>{escape(titulo)}</strong>{corpo}{lista}</div>'
+
+
+def vazia(texto: str, identificador: str = "") -> str:
+    atributo = f' id="{identificador}"' if identificador else ""
+    return f'<p class="vazia"{atributo}>{escape(texto)}</p>'
+
+
+def detalhes(resumo: str, conteudo: str, classe: str = "bloco") -> str:
+    return f'<details class="{classe}"><summary>{escape(resumo)}</summary><div class="dentro">{conteudo}</div></details>'
+
+
+def tabela(
+    cabecalho: Sequence[str],
+    linhas: Iterable[Sequence[str]],
+    identificador: str = "",
+    numericas: Iterable[int] = (),
+    compacta: bool = False,
+    vazia_com: str = "Lista vazia.",
+    destacadas: Iterable[int] = (),
+) -> str:
+    """As células de `linhas` já vêm escapadas; o cabeçalho é texto. `destacadas` são posições de linhas."""
+    alinhadas = set(numericas)
+    em_destaque = set(destacadas)
+    corpo = "".join(
+        ('<tr class="destacada">' if numero in em_destaque else "<tr>")
+        + "".join(_celula("td", celula, posicao in alinhadas) for posicao, celula in enumerate(linha))
+        + "</tr>"
+        for numero, linha in enumerate(linhas)
+    )
+    if not corpo:
+        return vazia(vazia_com)
+    atributos = (f' id="{identificador}"' if identificador else "") + (' class="compacta"' if compacta else "")
+    colunas = "".join(_celula("th", escape(coluna), posicao in alinhadas) for posicao, coluna in enumerate(cabecalho))
+    return (
+        f'<div class="cartao tabela"><table{atributos}><thead><tr>{colunas}</tr></thead>'
+        f"<tbody>{corpo}</tbody></table></div>"
+    )
+
+
+def _celula(tag: str, conteudo: str, numerica: bool) -> str:
+    return f'<{tag} class="num">{conteudo}</{tag}>' if numerica else f"<{tag}>{conteudo}</{tag}>"
+
+
+def campo_oculto(nome: str, valor: str) -> str:
     return f'<input type="hidden" name="{nome}" value="{escape(valor)}">'
 
 
-def _escolha(tipos: Iterable[TipoDeDecisao]) -> str:
-    opcoes = "".join(f'<option value="{escape(tipo.value)}">{escape(tipo.value)}</option>' for tipo in tipos)
-    return f'<label>Decisão<select name="decisao" required><option value=""></option>{opcoes}</select></label>'
-
-
-def _decidido_na_tela(decisao: DecisaoDaTela | None) -> str:
-    if decisao is None:
-        return ""
-    linha = decisao.linha
-    detalhes = [
-        f"{rotulo}: {valor}"
-        for rotulo, valor in (
-            ("motivo", linha.motivo),
-            ("Título(s)", linha.titulos),
-            ("Franqueado", linha.franqueado),
-            ("referência", linha.referencia),
-        )
-        if valor
-    ]
-    texto = linha.decisao + (f" ({'; '.join(detalhes)})" if detalhes else "")
-    return escape(f"{texto}, por {decisao.autor} em {decisao.momento:%d/%m/%Y %H:%M}")
-
-
-def _secao(titulo: str, identificador: str, conteudo: str) -> str:
-    return f'<section id="{identificador}"><h2>{escape(titulo)}</h2>{conteudo}</section>'
-
-
-def _total(texto: str) -> str:
-    return f'<p class="total">{escape(texto)}</p>'
-
-
-def _tabela_do_resumo(resultado: Resultado) -> str:
-    linhas = "".join(
-        f"<tr><th>{escape(rotulo)}</th><td>{escape(str(valor))}</td></tr>" for rotulo, valor in linhas_do_resumo(resultado)
+def renderizar_recusa(
+    mensagem: str, titulo: str = "Decisão não registrada", volta: tuple[Visao, str] = (Visao.ANALISTA, "Voltar à conciliação")
+) -> str:
+    destino, texto = volta
+    return documento(
+        titulo,
+        cabecalho_da_pagina(titulo)
+        + f'<div class="aviso problema"><p id="recusa">{escape(mensagem)}</p></div>'
+        + f'<p><a href="{destino.value}">{escape(texto)}</a></p>',
     )
-    return f'<div class="rolagem"><table id="resumo"><tbody>{linhas}</tbody></table></div>'
 
 
-def _tabela(cabecalho: Sequence[str], linhas: Iterable[tuple[str, Sequence[str]]], identificador: str = "") -> str:
-    corpo = "".join(
-        (f'<tr class="{classe}">' if classe else "<tr>") + "".join(f"<td>{celula}</td>" for celula in celulas) + "</tr>"
-        for classe, celulas in linhas
-    )
-    if not corpo:
-        return '<p class="vazia">Lista vazia.</p>'
-    atributo = f' id="{identificador}"' if identificador else ""
-    colunas = "".join(f"<th>{escape(coluna)}</th>" for coluna in cabecalho)
-    return f'<div class="rolagem"><table{atributo}><thead><tr>{colunas}</tr></thead><tbody>{corpo}</tbody></table></div>'
+_LARGURA_DO_ROTULO = 280
+_LARGURA_DAS_BARRAS = 320
+_LARGURA_DO_VALOR = 200
+_ALTURA_DA_LINHA = 30
+_ALTURA_DA_BARRA = 16
+_RAIO = 4
 
 
-def _credito(lancamento: Lancamento) -> str:
-    partes = [f"{lancamento.banco} {lancamento.conta}", f"{lancamento.data:%d/%m/%Y}", lancamento.historico]
-    if lancamento.documento:
-        partes.append(f"documento {lancamento.documento}")
-    partes.append(formatar_reais(lancamento.valor_centavos))
-    return escape(", ".join(partes))
-
-
-def _explicacao(item: Item) -> str:
-    if not item.pareceres:
-        return escape(item.explicacao)
-    marcacao = '<span class="ia-indisponivel">IA indisponível</span> ' if item.ia_indisponivel else ""
-    pareceres = "; ".join(parecer.descrever() for parecer in item.pareceres)
-    return f'{escape(item.explicacao)}<div class="parecer">{marcacao}Parecer da IA: {escape(pareceres)}</div>'
-
-
-def _itens(itens: Sequence[Item], itens_de_titulo: Sequence[ItemDeTitulo] = ()) -> str:
-    linhas = [
-        (
-            "com-parecer" if item.pareceres else "",
-            (
-                escape(item.identificador),
-                _credito(item.lancamento),
-                escape(descrever_titulos(item.titulos)),
-                escape("; ".join(tipo.value for tipo in item.evidencia)),
-                escape(item.motivo.value if item.motivo else ""),
-                _explicacao(item),
-            ),
-        )
-        for item in itens
-    ] + [
-        (
-            "",
-            (
-                escape(item.identificador),
-                "",
-                escape(descrever_titulos(item.titulos)),
-                "",
-                escape(item.motivo.value),
-                escape(item.explicacao),
-            ),
-        )
-        for item in itens_de_titulo
-    ]
-    return _tabela(("Item", "Crédito", "Título(s)", "Evidência", "Motivo", "Explicação"), linhas)
-
-
-def _cobranca(titulos: Sequence[TituloNaCobranca], candidatos_de: Resultado | None = None) -> str:
-    cabecalho = ["Título", "Sistema de origem", "Franqueado", "CNPJ", "Vencimento", "Vencimento efetivo", "Valor", "Saldo"]
-    if candidatos_de is not None:
-        cabecalho.append("Créditos candidatos")
-    linhas = []
-    for na_cobranca in titulos:
-        titulo = na_cobranca.titulo
-        celulas = [
-            titulo.documento,
-            titulo.sistema_de_origem,
-            titulo.nome_do_franqueado,
-            titulo.cnpj,
-            f"{titulo.vencimento:%d/%m/%Y}",
-            f"{vencimento_efetivo(titulo.vencimento):%d/%m/%Y}",
-            formatar_reais(titulo.valor_centavos),
-            formatar_reais(na_cobranca.saldo_centavos),
-        ]
-        if candidatos_de is not None:
-            celulas.append(
-                "; ".join(candidatos_de.item_do_lancamento(c).identificador for c in na_cobranca.creditos_candidatos)
-            )
-        linhas.append(("", [escape(celula) for celula in celulas]))
-    return _tabela(cabecalho, linhas)
-
-
-def _causa_raiz(causa_raiz: CausaRaiz) -> str:
-    agregacoes = (
-        ("Por Motivo de não identificação", "causa-raiz-por-motivo", causa_raiz.por_motivo),
-        ("Por Franqueado", "causa-raiz-por-franqueado", causa_raiz.por_franqueado),
-        ("Por banco", "causa-raiz-por-banco", causa_raiz.por_banco),
-        ("Por canal", "causa-raiz-por-canal", causa_raiz.por_canal),
-    )
-    graficos = (
-        "<h3>Quantidade por Motivo</h3>"
-        + _grafico_de_barras(
-            "grafico-quantidade-por-motivo", causa_raiz.por_motivo, lambda g: g.quantidade, lambda g: str(g.quantidade)
-        )
-        + "<h3>Valor por Motivo</h3>"
-        + _grafico_de_barras(
-            "grafico-valor-por-motivo",
-            causa_raiz.por_motivo,
-            lambda g: g.valor_centavos,
-            lambda g: formatar_reais(g.valor_centavos),
-        )
-    )
-    tabelas = "".join(
-        f"<h3>{escape(titulo)}</h3>" + _agregacao(identificador, causa_raiz, grupos)
-        for titulo, identificador, grupos in agregacoes
-    )
-    total = _total(
-        f"{causa_raiz.quantidade} Crédito(s) na Fila de exceções e Conciliados fora, "
-        f"{formatar_reais(causa_raiz.valor_centavos)}"
-    )
-    return total + graficos + tabelas
-
-
-def _agregacao(identificador: str, causa_raiz: CausaRaiz, grupos: Sequence[GrupoDaCausaRaiz]) -> str:
-    total = GrupoDaCausaRaiz("Total", causa_raiz.quantidade, causa_raiz.valor_centavos)
-    linhas = [
-        (
-            "",
-            [
-                escape(celula)
-                for celula in (
-                    grupo.nome,
-                    str(grupo.quantidade),
-                    _percentual(causa_raiz.fracao_da_quantidade(grupo)),
-                    formatar_reais(grupo.valor_centavos),
-                    _percentual(causa_raiz.fracao_do_valor(grupo)),
-                )
-            ],
-        )
-        for grupo in (*grupos, total)
-    ]
-    return _tabela(("Grupo", "Quantidade", "% quantidade", "Valor", "% valor"), linhas, identificador)
-
-
-def _percentual(fracao: Fraction | None) -> str:
-    return formatar_percentual(fracao * 100) if fracao is not None else ""
-
-
-_LARGURA_DO_ROTULO = 270
-_LARGURA_DAS_BARRAS = 300
-_LARGURA_DO_VALOR = 110
-_ALTURA_DA_LINHA = 24
-_ALTURA_DA_BARRA = 14
-
-
-def _grafico_de_barras(
+def grafico_de_barras(
     identificador: str,
     grupos: Sequence[GrupoDaCausaRaiz],
     medida: Callable[[GrupoDaCausaRaiz], int],
@@ -421,252 +391,28 @@ def _grafico_de_barras(
         topo = posicao * _ALTURA_DA_LINHA
         base_do_texto = topo + _ALTURA_DA_LINHA // 2 + 4
         comprimento = _LARGURA_DAS_BARRAS * medida(grupo) / maior if maior else 0.0
+        rotulo = escape(rotulo_da_medida(grupo))
         barras.append(
-            '<g class="barra">'
+            f'<g class="barra"><title>{escape(grupo.nome)}: {rotulo}</title>'
             f'<text x="0" y="{base_do_texto}">{escape(grupo.nome)}</text>'
-            f'<rect x="{_LARGURA_DO_ROTULO}" y="{topo + (_ALTURA_DA_LINHA - _ALTURA_DA_BARRA) // 2}" '
-            f'width="{comprimento:.1f}" height="{_ALTURA_DA_BARRA}"></rect>'
-            f'<text x="{_LARGURA_DO_ROTULO + comprimento + 6:.1f}" y="{base_do_texto}">'
-            f"{escape(rotulo_da_medida(grupo))}</text>"
+            + _barra(_LARGURA_DO_ROTULO, topo + (_ALTURA_DA_LINHA - _ALTURA_DA_BARRA) / 2, comprimento)
+            + f'<text class="valor" x="{_LARGURA_DO_ROTULO + comprimento + 8:.1f}" y="{base_do_texto}">{rotulo}</text>'
             "</g>"
         )
+    base = f'<line class="base" x1="{_LARGURA_DO_ROTULO}" y1="0" x2="{_LARGURA_DO_ROTULO}" y2="{altura}"></line>'
     return (
-        f'<div class="rolagem"><svg id="{identificador}" role="img" width="{largura}" height="{altura}" '
-        f'viewBox="0 0 {largura} {altura}">{"".join(barras)}</svg></div>'
+        f'<div class="grafico"><svg id="{identificador}" role="img" width="{largura}" height="{altura}" '
+        f'viewBox="0 0 {largura} {altura}">{"".join(barras)}{base}</svg></div>'
     )
 
 
-def _fora_do_escopo(itens: Sequence[Item]) -> str:
-    linhas = [
-        ("", (escape(item.identificador), _credito(item.lancamento), escape(item.explicacao))) for item in itens
-    ]
-    return _tabela(("Item", "Crédito", "Explicação"), linhas)
-
-
-def renderizar_impacto(relatorio: RelatorioDeImpacto | None) -> str:
-    if relatorio is None:
-        return _documento(
-            "Análise de impacto",
-            '<p id="sem-analise">Não há análise de impacto registrada no armazenamento. '
-            "Rode o comando analisar-impacto sobre uma pasta base para gerar a primeira.</p>",
-        )
-    return _documento(f"Análise de impacto de {relatorio.momento:%d/%m/%Y %H:%M}", _corpo_do_impacto(relatorio))
-
-
-def _corpo_do_impacto(relatorio: RelatorioDeImpacto) -> str:
-    cenarios = (relatorio.antes, *relatorio.todos_migrados)
-    analise = (
-        f'<p class="total" id="analise">Pasta base {escape(relatorio.pasta_base)}, semente {relatorio.semente}. '
-        "A análise roda pelo comando analisar-impacto; esta página só mostra a última gravada.</p>"
+def _barra(x: float, y: float, comprimento: float) -> str:
+    """Barra horizontal com a ponta arredondada e a base reta, encostada no eixo."""
+    raio = min(_RAIO, comprimento)
+    fim = x + comprimento
+    caminho = (
+        f"M{x:.1f},{y:.1f} H{fim - raio:.1f} Q{fim:.1f},{y:.1f} {fim:.1f},{y + raio:.1f} "
+        f"V{y + _ALTURA_DA_BARRA - raio:.1f} Q{fim:.1f},{y + _ALTURA_DA_BARRA:.1f} {fim - raio:.1f},"
+        f"{y + _ALTURA_DA_BARRA:.1f} H{x:.1f} Z"
     )
-    return analise + "".join(
-        (
-            _secao(
-                "Antes e depois por Adesão, com todos os Franqueados migrados",
-                "secao-antes-e-depois",
-                _antes_e_depois(cenarios)
-                + "<h3>Créditos do antes que ficam soltos no depois, por razão</h3>"
-                + _soltos_por_razao(relatorio.todos_migrados),
-            ),
-            _secao(
-                "Fila por Adesão",
-                "secao-fila-por-adesao",
-                _grafico_da_fila("grafico-fila-por-adesao", [(_nome_do_cenario(c), c) for c in cenarios]),
-            ),
-            _secao("Ondas de migração", "secao-ondas", _ondas(relatorio)),
-            _secao("Fila por Motivo de não identificação", "secao-fila-por-motivo", _fila_por_motivo(cenarios)),
-            _secao("Ranking de migração", "secao-ranking", _ranking(relatorio.ranking)),
-            _secao("Premissas", "secao-premissas", _premissas(relatorio.premissas)),
-        )
-    )
-
-
-def _nome_do_cenario(numeros: NumerosDoCenario) -> str:
-    return "Antes" if numeros.adesao is None else numeros.nome
-
-
-def _antes_e_depois(cenarios: Sequence[NumerosDoCenario]) -> str:
-    medidas: tuple[tuple[str, Callable[[NumerosDoCenario], str]], ...] = (
-        ("Créditos identificados", lambda c: str(c.identificados.quantidade)),
-        ("Valor identificado", lambda c: formatar_reais(c.identificados.valor_centavos)),
-        ("Créditos soltos", lambda c: str(c.soltos.quantidade)),
-        ("Valor solto", lambda c: formatar_reais(c.soltos.valor_centavos)),
-        ("Não identificáveis pelo valor", lambda c: _nao_identificaveis(c, lambda t: str(t.quantidade))),
-        (
-            "Valor não identificável pelo valor",
-            lambda c: _nao_identificaveis(c, lambda t: formatar_reais(t.valor_centavos)),
-        ),
-        ("Créditos na Fila", lambda c: str(c.fila_de_excecoes.quantidade)),
-        ("Valor na Fila", lambda c: formatar_reais(c.fila_de_excecoes.valor_centavos)),
-        ("% resolvido sozinho (quantidade)", lambda c: _percentual_de(c.parte_automatica.percentual_da_quantidade)),
-        ("% resolvido sozinho (valor)", lambda c: _percentual_de(c.parte_automatica.percentual_do_valor)),
-    )
-    linhas = [("", [escape(rotulo), *(escape(medida(c)) for c in cenarios)]) for rotulo, medida in medidas]
-    return _tabela(("Medida", *(_nome_do_cenario(c) for c in cenarios)), linhas, "antes-e-depois")
-
-
-def _nao_identificaveis(numeros: NumerosDoCenario, medida: Callable[[TotalDoDestino], str]) -> str:
-    total = numeros.soltos_por_razao.get(PorQueFicaSolto.NAO_IDENTIFICAVEL_PELO_VALOR)
-    return medida(total) if total is not None else ""
-
-
-def _soltos_por_razao(cenarios: Sequence[NumerosDoCenario]) -> str:
-    linhas = [
-        (
-            "",
-            [escape(razao.value), *(escape(_creditos_e_valor(c.soltos_por_razao[razao])) for c in cenarios)],
-        )
-        for razao in RAZOES_DO_RESUMO
-    ]
-    return _tabela(("Razão", *(c.nome for c in cenarios)), linhas, "soltos-por-razao")
-
-
-def _creditos_e_valor(total: TotalDoDestino) -> str:
-    return f"{total.quantidade} Crédito(s), {formatar_reais(total.valor_centavos)}"
-
-
-def _grafico_da_fila(identificador: str, cenarios: Sequence[tuple[str, NumerosDoCenario]]) -> str:
-    grupos = [
-        GrupoDaCausaRaiz(nome, c.fila_de_excecoes.quantidade, c.fila_de_excecoes.valor_centavos) for nome, c in cenarios
-    ]
-    return _grafico_de_barras(
-        identificador,
-        grupos,
-        lambda grupo: grupo.quantidade,
-        lambda grupo: _creditos_e_valor(TotalDoDestino(grupo.quantidade, grupo.valor_centavos)),
-    )
-
-
-def _ondas(relatorio: RelatorioDeImpacto) -> str:
-    graficos = "".join(
-        f"<h3>Fila a cada onda acumulada, {escape(todos.nome)}</h3>"
-        + _grafico_da_fila(
-            f"grafico-fila-por-onda-{posicao}",
-            [
-                ("Antes", relatorio.antes),
-                *(_na_onda(onda.onda, onda.cenarios[posicao]) for onda in relatorio.ondas),
-                (f"Todos os Franqueados ({todos.franqueados_migrados})", todos),
-            ],
-        )
-        for posicao, todos in enumerate(relatorio.todos_migrados)
-    )
-    linhas: list[tuple[str, NumerosDoCenario]] = [
-        ("Antes", relatorio.antes),
-        *((str(onda.onda), cenario) for onda in relatorio.ondas for cenario in onda.cenarios),
-        *(("Todos os Franqueados", cenario) for cenario in relatorio.todos_migrados),
-    ]
-    tabela = _tabela(
-        (
-            "Onda acumulada",
-            "Franqueados migrados",
-            "Adesão (%)",
-            "Créditos identificados",
-            "Créditos de Franqueados não migrados",
-            "Créditos na Fila",
-            "Valor na Fila",
-            "% resolvido sozinho (quantidade)",
-            "% resolvido sozinho (valor)",
-        ),
-        [
-            (
-                "",
-                [
-                    escape(celula)
-                    for celula in (
-                        onda,
-                        str(numeros.franqueados_migrados),
-                        _adesao_de(numeros),
-                        str(numeros.identificados.quantidade),
-                        _quantidade_de(numeros.soltos_por_razao.get(PorQueFicaSolto.FRANQUEADO_NAO_MIGRADO)),
-                        str(numeros.fila_de_excecoes.quantidade),
-                        formatar_reais(numeros.fila_de_excecoes.valor_centavos),
-                        _percentual_de(numeros.parte_automatica.percentual_da_quantidade),
-                        _percentual_de(numeros.parte_automatica.percentual_do_valor),
-                    )
-                ],
-            )
-            for onda, numeros in linhas
-        ],
-        "ondas",
-    )
-    return _total(EXPLICACAO_DAS_ONDAS) + graficos + "<h3>Ondas acumuladas</h3>" + tabela
-
-
-def _na_onda(onda: int, numeros: NumerosDoCenario) -> tuple[str, NumerosDoCenario]:
-    return f"Onda {onda} ({numeros.franqueados_migrados} Franqueado(s))", numeros
-
-
-def _adesao_de(numeros: NumerosDoCenario) -> str:
-    return "" if numeros.adesao is None else formatar_adesao(numeros.adesao)
-
-
-def _quantidade_de(total: TotalDoDestino | None) -> str:
-    return "" if total is None else str(total.quantidade)
-
-
-def _percentual_de(percentual: Fraction | None) -> str:
-    return formatar_percentual(percentual) if percentual is not None else ""
-
-
-def _fila_por_motivo(cenarios: Sequence[NumerosDoCenario]) -> str:
-    linhas = [
-        (
-            "",
-            [
-                escape("Total" if motivo is None else motivo.value),
-                *(escape(celula) for c in cenarios for celula in _quantidade_e_valor(_da_fila(c, motivo))),
-            ],
-        )
-        for motivo in (*MotivoDeNaoIdentificacao, None)
-    ]
-    cabecalho = (
-        "Motivo de não identificação",
-        *(f"{c.nome} ({medida})" for c in cenarios for medida in ("Créditos", "valor")),
-    )
-    return _tabela(cabecalho, linhas, "fila-por-motivo")
-
-
-def _quantidade_e_valor(total: TotalDoDestino) -> tuple[str, str]:
-    return str(total.quantidade), formatar_reais(total.valor_centavos)
-
-
-def _da_fila(numeros: NumerosDoCenario, motivo: MotivoDeNaoIdentificacao | None) -> TotalDoDestino:
-    return numeros.fila_de_excecoes if motivo is None else numeros.fila_por_motivo[motivo]
-
-
-def _ranking(ranking: RankingDeMigracao) -> str:
-    linhas = [
-        (
-            "",
-            [
-                escape(celula)
-                for celula in (
-                    str(franqueado.onda),
-                    str(franqueado.posicao),
-                    franqueado.nome,
-                    franqueado.raiz,
-                    str(franqueado.quantidade),
-                    formatar_reais(franqueado.valor_centavos),
-                )
-            ],
-        )
-        for franqueado in ranking.franqueados
-    ]
-    sem = ranking.sem_franqueado
-    sem_franqueado = _total(
-        f"{_creditos_e_valor(TotalDoDestino(sem.quantidade, sem.valor_centavos))} {sem.nome}. "
-        + EXPLICACAO_DO_SEM_FRANQUEADO
-    )
-    cabecalho = ("Onda", "Posição", "Franqueado", "Raiz do CNPJ", "Créditos na Fila", "Valor")
-    return _tabela(cabecalho, linhas, "ranking") + sem_franqueado
-
-
-def _premissas(premissas: Sequence[tuple[str, ValorDaPremissa]]) -> str:
-    linhas = [("", [escape(nome), escape(_valor_da_premissa(valor))]) for nome, valor in premissas]
-    return _tabela(("Premissa", "Valor"), linhas, "premissas")
-
-
-def _valor_da_premissa(valor: ValorDaPremissa) -> str:
-    if isinstance(valor, Decimal):
-        return f"{valor:f}".replace(".", ",")
-    return str(valor)
+    return f'<path class="marca-da-barra" d="{caminho}" data-comprimento="{comprimento:.1f}"></path>'

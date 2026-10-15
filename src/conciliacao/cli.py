@@ -1,13 +1,56 @@
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from conciliacao.armazenamento import Armazenamento
 from conciliacao.conferencia import ConferenciaDeSomaFalhou
-from conciliacao.configuracao import ConfiguracaoInvalida, carregar_configuracao
+from conciliacao.configuracao import Configuracao, ConfiguracaoInvalida, carregar_configuracao
+from conciliacao.dominio import Resultado
 from conciliacao.execucao import executar_conciliacao
-from conciliacao.parecerista import parecerista_da_configuracao
+from conciliacao.parecerista import PareceristaDeNome, parecerista_da_configuracao
 from conciliacao.saidas import gerar_workbook
+
+PareceristaDe = Callable[[Configuracao], PareceristaDeNome]
+
+
+class ConciliacaoNaoRodou(Exception):
+    def __init__(self, mensagem: str, codigo: int) -> None:
+        super().__init__(mensagem)
+        self.codigo = codigo
+
+
+def parecerista_configurado(configuracao: Configuracao) -> PareceristaDeNome:
+    return parecerista_da_configuracao(configuracao.ia)
+
+
+def conciliar_a_pasta(
+    pasta: Path,
+    configuracao: Path,
+    estado: Path,
+    saida: Path,
+    parecerista_de: PareceristaDe = parecerista_configurado,
+    ajustar: Callable[[Configuracao], Configuracao] = lambda configuracao: configuracao,
+) -> Resultado:
+    if not pasta.is_dir():
+        raise ConciliacaoNaoRodou(f"Pasta de entrada não encontrada: {pasta}", 2)
+    try:
+        carregada = ajustar(carregar_configuracao(configuracao))
+    except FileNotFoundError:
+        raise ConciliacaoNaoRodou(f"Configuração não encontrada: {configuracao}", 2) from None
+    except ConfiguracaoInvalida as erro:
+        raise ConciliacaoNaoRodou(f"Configuração inválida: {erro}", 2) from None
+
+    armazenamento = Armazenamento(estado)
+    try:
+        resultado = executar_conciliacao(pasta, armazenamento, carregada, parecerista_de(carregada), workbook_anterior=saida)
+    except ConferenciaDeSomaFalhou as erro:
+        raise ConciliacaoNaoRodou(str(erro), 1) from None
+    finally:
+        armazenamento.fechar()
+
+    gerar_workbook(resultado, saida)
+    return resultado
 
 
 def main(argumentos: list[str] | None = None) -> int:
@@ -18,34 +61,11 @@ def main(argumentos: list[str] | None = None) -> int:
     parser.add_argument("--saida", type=Path, default=Path("conciliacao.xlsx"))
     opcoes = parser.parse_args(argumentos)
 
-    if not opcoes.pasta.is_dir():
-        print(f"Pasta de entrada não encontrada: {opcoes.pasta}", file=sys.stderr)
-        return 2
     try:
-        configuracao = carregar_configuracao(opcoes.configuracao)
-    except FileNotFoundError:
-        print(f"Configuração não encontrada: {opcoes.configuracao}", file=sys.stderr)
-        return 2
-    except ConfiguracaoInvalida as erro:
-        print(f"Configuração inválida: {erro}", file=sys.stderr)
-        return 2
-
-    armazenamento = Armazenamento(opcoes.estado)
-    try:
-        resultado = executar_conciliacao(
-            opcoes.pasta,
-            armazenamento,
-            configuracao,
-            parecerista_da_configuracao(configuracao.ia),
-            workbook_anterior=opcoes.saida,
-        )
-    except ConferenciaDeSomaFalhou as erro:
+        conciliar_a_pasta(opcoes.pasta, opcoes.configuracao, opcoes.estado, opcoes.saida)
+    except ConciliacaoNaoRodou as erro:
         print(str(erro), file=sys.stderr)
-        return 1
-    finally:
-        armazenamento.fechar()
-
-    gerar_workbook(resultado, opcoes.saida)
+        return erro.codigo
     print(f"Workbook gerado em {opcoes.saida}")
     return 0
 

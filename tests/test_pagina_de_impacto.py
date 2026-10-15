@@ -52,7 +52,10 @@ def endereco(estado: Path) -> Iterator[str]:
         servidor.server_close()
 
 
-def _html(endereco: str, caminho: str = "/impacto") -> str:
+MIGRACAO = "/enderecada/migracao"
+
+
+def _html(endereco: str, caminho: str = MIGRACAO) -> str:
     with urllib.request.urlopen(endereco + caminho) as resposta:
         assert resposta.status == 200
         assert resposta.headers.get_content_type() == "text/html"
@@ -60,7 +63,7 @@ def _html(endereco: str, caminho: str = "/impacto") -> str:
         return texto
 
 
-def _abrir(endereco: str, caminho: str = "/impacto") -> Elemento:
+def _abrir(endereco: str, caminho: str = MIGRACAO) -> Elemento:
     return ler_pagina(_html(endereco, caminho))
 
 
@@ -153,7 +156,7 @@ def test_armazenamento_so_com_execucao_diaria_tambem_diz_que_nao_ha_analise(
     pagina = _abrir(endereco)
 
     assert pagina.tem_id("sem-analise")
-    assert pagina.todos("table") == []
+    assert not pagina.tem_id("antes-e-depois") and not pagina.tem_id("ranking")
 
 
 def test_a_pagina_mostra_os_mesmos_numeros_do_workbook_da_mesma_analise(
@@ -217,6 +220,10 @@ def test_a_pagina_le_a_ultima_analise_gravada_sem_recalcular(
     assert "semente 5" in pagina.por_id("analise").texto
 
 
+def _texto_da_barra(barra: Elemento) -> str:
+    return " ".join(texto.texto for texto in barra.todos("text"))
+
+
 def test_graficos_da_fila_por_adesao_e_por_onda_desenhados_no_servidor_sem_recurso_externo(
     endereco: str, pasta: Path, estado: Path, tmp_path: Path
 ) -> None:
@@ -230,7 +237,7 @@ def test_graficos_da_fila_por_adesao_e_por_onda_desenhados_no_servidor_sem_recur
     por_adesao = pagina.por_id("grafico-fila-por-adesao")
     assert por_adesao.tag == "svg"
     barras = por_adesao.todos("g", classe="barra")
-    assert [b.texto for b in barras] == [
+    assert [_texto_da_barra(b) for b in barras] == [
         f"{nome} {quantidade} Crédito(s), {valor}"
         for nome, quantidade, valor in zip(
             pagina.por_id("antes-e-depois").linhas()[0][1:], resumo["Créditos na Fila"], resumo["Valor na Fila"]
@@ -241,7 +248,7 @@ def test_graficos_da_fila_por_adesao_e_por_onda_desenhados_no_servidor_sem_recur
     assert quantas_ondas >= 2
     for posicao, adesao in enumerate(("50%", "100%")):
         grafico = pagina.por_id(f"grafico-fila-por-onda-{posicao}")
-        textos = [b.texto for b in grafico.todos("g", classe="barra")]
+        textos = [_texto_da_barra(b) for b in grafico.todos("g", classe="barra")]
         assert len(textos) == 1 + quantas_ondas + 1
         assert textos[0].startswith("Antes") and textos[1].startswith("Onda 1 (1 Franqueado(s))")
         assert textos[-1].startswith("Todos os Franqueados")
@@ -260,16 +267,20 @@ def test_a_pagina_e_so_leitura(endereco: str, pasta: Path, estado: Path, tmp_pat
 
     assert pagina.todos("form") == [] and pagina.todos("button") == []
     with pytest.raises(urllib.error.HTTPError) as erro:
-        urllib.request.urlopen(urllib.request.Request(endereco + "/impacto", data=b"", method="POST"))
+        urllib.request.urlopen(urllib.request.Request(endereco + MIGRACAO, data=b"", method="POST"))
     assert erro.value.code == 404
 
 
-def test_a_tela_da_execucao_da_acesso_a_pagina_de_impacto_e_volta(endereco: str) -> None:
-    inicial = _abrir(endereco, "/")
-    impacto = _abrir(endereco, "/impacto")
+def test_a_analise_de_impacto_fica_na_migracao_da_cobranca_enderecada(endereco: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as erro:
+        urllib.request.urlopen(endereco + "/impacto")
 
-    assert any(a.atributos.get("href") == "/impacto" for a in inicial.por_id("navegacao").todos("a"))
-    assert any(a.atributos.get("href") == "/" for a in impacto.por_id("navegacao").todos("a"))
+    assert erro.value.code == 404
+    pagina = _abrir(endereco)
+    [produto] = [a for a in pagina.por_id("produtos").todos("a") if a.atributos.get("aria-current") == "page"]
+    assert produto.texto == "Cobrança Endereçada"
+    assert any(a.atributos.get("href") == MIGRACAO for a in pagina.por_id("navegacao").todos("a"))
+    assert not _abrir(endereco, "/gestao").tem_id("secao-antes-e-depois")
 
 
 def test_a_analise_gravada_volta_igual_do_armazenamento_sem_mudar_a_execucao_diaria(
